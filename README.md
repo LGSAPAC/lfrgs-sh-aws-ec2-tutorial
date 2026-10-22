@@ -188,27 +188,56 @@ Signed in as the account's **root user**: turn on **MFA**, create **no access ke
 
 Use **IAM Identity Center** (recommended) or an IAM user:
 
-- **IAM Identity Center:** create a user, assign it to the account with the **`PowerUserAccess`** permission set **plus** an inline policy allowing IAM role and OIDC provider management (Terraform creates the instance role and the GitHub Actions role):
+- **IAM Identity Center:** create a user, assign it to the account with the **`PowerUserAccess`** permission set **plus** an inline policy that lets Terraform create this stack's two IAM roles (`<name>-instance`, `<name>-github-actions`) and the GitHub OIDC provider. Replace `liferay-poc` if you use another stack `name`:
 
   ```json
   {
     "Version": "2012-10-17",
-    "Statement": [{
-      "Effect": "Allow",
-      "Action": [
-        "iam:CreateRole", "iam:DeleteRole", "iam:GetRole", "iam:TagRole", "iam:UntagRole",
-        "iam:PutRolePolicy", "iam:GetRolePolicy", "iam:DeleteRolePolicy", "iam:ListRolePolicies",
-        "iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:ListAttachedRolePolicies",
-        "iam:CreateInstanceProfile", "iam:DeleteInstanceProfile", "iam:GetInstanceProfile",
-        "iam:AddRoleToInstanceProfile", "iam:RemoveRoleFromInstanceProfile", "iam:ListInstanceProfilesForRole",
-        "iam:TagInstanceProfile", "iam:PassRole", "iam:ListRoles",
-        "iam:CreateOpenIDConnectProvider", "iam:DeleteOpenIDConnectProvider",
-        "iam:GetOpenIDConnectProvider", "iam:ListOpenIDConnectProviders", "iam:TagOpenIDConnectProvider"
-      ],
-      "Resource": "*"
-    }]
+    "Statement": [
+      {
+        "Sid": "ManageStackRoles",
+        "Effect": "Allow",
+        "Action": [
+          "iam:CreateRole", "iam:DeleteRole", "iam:GetRole", "iam:TagRole", "iam:UntagRole",
+          "iam:UpdateAssumeRolePolicy",
+          "iam:PutRolePolicy", "iam:GetRolePolicy", "iam:DeleteRolePolicy", "iam:ListRolePolicies",
+          "iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:ListAttachedRolePolicies",
+          "iam:ListInstanceProfilesForRole",
+          "iam:CreateInstanceProfile", "iam:DeleteInstanceProfile", "iam:GetInstanceProfile",
+          "iam:AddRoleToInstanceProfile", "iam:RemoveRoleFromInstanceProfile", "iam:TagInstanceProfile"
+        ],
+        "Resource": [
+          "arn:aws:iam::*:role/liferay-poc-*",
+          "arn:aws:iam::*:instance-profile/liferay-poc-*"
+        ]
+      },
+      {
+        "Sid": "PassInstanceRoleToEc2Only",
+        "Effect": "Allow",
+        "Action": "iam:PassRole",
+        "Resource": "arn:aws:iam::*:role/liferay-poc-instance",
+        "Condition": { "StringEquals": { "iam:PassedToService": "ec2.amazonaws.com" } }
+      },
+      {
+        "Sid": "ManageGitHubOidcProvider",
+        "Effect": "Allow",
+        "Action": [
+          "iam:CreateOpenIDConnectProvider", "iam:DeleteOpenIDConnectProvider",
+          "iam:GetOpenIDConnectProvider", "iam:TagOpenIDConnectProvider"
+        ],
+        "Resource": "arn:aws:iam::*:oidc-provider/token.actions.githubusercontent.com"
+      },
+      {
+        "Sid": "ListForChecks",
+        "Effect": "Allow",
+        "Action": ["iam:ListRoles", "iam:ListOpenIDConnectProviders"],
+        "Resource": "*"
+      }
+    ]
   }
   ```
+
+  `iam:PassRole` is limited to the instance role and to EC2, so this user can't hand any other role to any service.
 
 - **IAM user (if Identity Center is not available):** same permissions, console access with MFA, and an access key for the CLI stored only in your own `~/.aws/credentials`.
 - Avoid `AdministratorAccess` in shared accounts. For production, scope the policy to the resources Terraform manages.
