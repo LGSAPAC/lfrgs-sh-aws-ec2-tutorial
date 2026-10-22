@@ -37,7 +37,7 @@ check "EFS"                         aws efs describe-file-systems --max-items 1 
 check "S3"                          aws s3api list-buckets --max-items 1 --query 'length(Buckets)' --output text
 check "ECR"                         aws ecr describe-repositories --max-items 1 --query 'length(repositories)' --output text
 check "SSM"                         aws ssm describe-instance-information --max-items 1 --query 'length(InstanceInformationList)' --output text
-check "IAM (roles)"                 aws iam list-roles --max-items 1 --query 'length(Roles)' --output text
+check "IAM (roles)"                 aws iam list-roles --query 'length(Roles)' --output text
 check "IAM (OIDC providers)"        aws iam list-open-id-connect-providers --query 'length(OpenIDConnectProviderList)' --output text
 check "ACM"                         aws acm list-certificates --max-items 1 --query 'length(CertificateSummaryList)' --output text
 check "AL2023 AMI parameter"        aws ssm get-parameter --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 --query Parameter.Value --output text
