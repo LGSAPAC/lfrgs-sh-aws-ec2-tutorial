@@ -3,7 +3,7 @@
 **Product:** Liferay DXP 2026.Q1 LTS (`2026.q1.13-lts`), self-hosted on Amazon EC2, deployed with Docker (or the traditional Tomcat bundle)
 **Audience:** Partner and customer technical teams setting up a sandbox or proof-of-concept (PoC) environment
 **Prepared by:** Liferay Customer Success APAC
-**Status:** Draft, October 2026. Sections 2 to 8, 11 and 12 (prerequisites, tools, AWS access, Terraform plan and apply, instance bootstrap, first start and sign-in, validation, CI/CD deploy) tested on 22 October 2026 in Asia Pacific (Tokyo), single mode with the Docker runtime; sections 9, 10 and 13 onwards not yet run on AWS. The Terraform passes `terraform validate`, every shell script passes ShellCheck, and the sample workspace's build and `linux/amd64` image jobs passed in GitHub Actions on 22 October 2026 ([run 39708712711](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace/actions/runs/39708712711)). Items to confirm are marked **🔎 Verify**.
+**Status:** Draft, October 2026. Sections 2 to 8, 11, 12 and 15 (prerequisites, tools, AWS access, Terraform plan and apply, instance bootstrap, first start and sign-in, validation, CI/CD deploy, teardown) tested on 22 October 2026 in Asia Pacific (Tokyo), single mode with the Docker runtime; sections 9 (high availability), 10 (HTTPS) and 13 not yet run on AWS. The Terraform passes `terraform validate`, every shell script passes ShellCheck, and the sample workspace's build and `linux/amd64` image jobs passed in GitHub Actions on 22 October 2026 ([run 39708712711](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace/actions/runs/39708712711)). Items to confirm are marked **🔎 Verify**.
 
 > ⚠️ **Read this first: this is a draft, only partly tested.**
 > Sections that have been run on a real AWS account are marked **✅ Tested** or **🟡 Partly tested**; the others have not been run yet. This guide builds Liferay on plain EC2 instances: no Kubernetes, no EKS, no Helm. It combines Liferay's documented self-hosted installation (Docker image and Tomcat bundle, Cluster Link, remote Elasticsearch) with common AWS practice (Terraform, Application Load Balancer, RDS, EFS, Systems Manager, GitHub OIDC). AWS console labels and instance types change; follow AWS documentation where it differs from this guide.
@@ -1156,13 +1156,18 @@ Consistent backups: Liferay's database and Documents and Media must be restored 
 
 ## 15. Tear down the environment
 
+> ✅ **Tested on 22 October 2026** in Asia Pacific (Tokyo), single mode: `Destroy complete` for all 58 resources in about 1 minute, and nothing left afterwards.
+
+Preview it first, then destroy:
+
 ```bash
-terraform -chdir=terraform destroy
+terraform -chdir=terraform plan -destroy -out=destroy.tfplan
+terraform -chdir=terraform apply destroy.tfplan
 ```
 
-With `force_destroy = true` (the default), this deletes the S3 bucket and its objects, the ECR images and the RDS instance **without a final snapshot**. Take any backups you need first.
+The plan should list only this stack's resources (`Plan: 0 to add, 0 to change, 58 to destroy.` in single mode). With `force_destroy = true` (the default), this deletes the S3 bucket and its objects, the ECR images and the RDS instance **without a final snapshot**, and in single mode the instance's disk, which holds the database and Documents and Media. Take any backups you need first. Rebuilding is sections 5 to 7 again (under 10 minutes for single mode).
 
-If you created a GitHub environment and variables, remove them too:
+Remove the workspace's GitHub variables too. Otherwise its next push to `main` fails at **Sign in to AWS**, because the role no longer exists. Without them, the workflow still builds and checks the image, but doesn't push or deploy. You can keep the `ec2` environment for next time.
 
 ```bash
 for v in AWS_REGION AWS_ROLE_ARN ECR_REPOSITORY ARTIFACT_BUCKET LIFERAY_STACK LIFERAY_RUNTIME; do
@@ -1178,7 +1183,22 @@ aws resourcegroupstaggingapi get-resources --tag-filters "Key=LiferayStack,Value
 aws ssm get-parameters-by-path --path "/${STACK}" --query 'length(Parameters)'
 ```
 
-✅ Expected: `0`, `[]` (or only resources that are still being deleted) and `0`. Check **Billing → Bills** the next day: no running charges for EC2, NAT gateway, ALB, RDS or EFS.
+✅ Expected: `0`, `[]` and `0`. The tagging API (the second command) lags: for minutes to hours after a destroy it can still list ARNs of resources that are already gone (in testing: the terminated instance, its volume, security-group rules and the S3 endpoint). Check any it lists directly, for example `aws ec2 describe-volumes --volume-ids <vol-id>`, which should fail with `does not exist`; the instance shows `terminated`.
+
+✅ The billable parts are gone (Docker or Tomcat, single or HA):
+
+```bash
+aws elbv2 describe-load-balancers --query 'length(LoadBalancers)'
+aws ec2 describe-nat-gateways --filter Name=state,Values=pending,available --query 'length(NatGateways)'
+aws ec2 describe-addresses --query 'length(Addresses)'
+aws ec2 describe-volumes --filters Name=status,Values=available --query 'length(Volumes)'
+aws rds describe-db-instances --query 'length(DBInstances)'
+aws efs describe-file-systems --query 'length(FileSystems)'
+aws ecr describe-repositories --query 'length(repositories)'
+terraform -chdir=terraform state list | wc -l
+```
+
+Expected `0` for each in an account used only for this guide (otherwise, none of them belongs to `${STACK}`). `aws ec2 describe-vpcs` should show only the default VPC. Check **Billing → Bills** the next day: no running charges for EC2, NAT gateway, ALB, RDS or EFS.
 
 ---
 
