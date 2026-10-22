@@ -3,7 +3,7 @@
 **Product:** Liferay DXP 2026.Q1 LTS (`2026.q1.13-lts`), self-hosted on Amazon EC2, deployed with Docker (or the traditional Tomcat bundle)
 **Audience:** Partner and customer technical teams setting up a sandbox or proof-of-concept (PoC) environment
 **Prepared by:** Liferay Customer Success APAC
-**Status:** Draft, October 2026. Sections 2 to 8 (prerequisites, tools, AWS access, Terraform plan and apply, instance bootstrap, first start and sign-in) tested on 22 October 2026 in Asia Pacific (Tokyo), single mode with the Docker runtime; sections 9 onwards not yet run on AWS. The Terraform passes `terraform validate`, every shell script passes ShellCheck, and the sample workspace's build and `linux/amd64` image jobs passed in GitHub Actions on 22 October 2026 ([run 39708712711](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace/actions/runs/39708712711)). Items to confirm are marked **🔎 Verify**.
+**Status:** Draft, October 2026. Sections 2 to 8 and 11 (prerequisites, tools, AWS access, Terraform plan and apply, instance bootstrap, first start and sign-in, validation) tested on 22 October 2026 in Asia Pacific (Tokyo), single mode with the Docker runtime; sections 9, 10 and 12 onwards not yet run on AWS. The Terraform passes `terraform validate`, every shell script passes ShellCheck, and the sample workspace's build and `linux/amd64` image jobs passed in GitHub Actions on 22 October 2026 ([run 39708712711](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace/actions/runs/39708712711)). Items to confirm are marked **🔎 Verify**.
 
 > ⚠️ **Read this first: this is a draft, only partly tested.**
 > Sections that have been run on a real AWS account are marked **✅ Tested** or **🟡 Partly tested**; the others have not been run yet. This guide builds Liferay on plain EC2 instances: no Kubernetes, no EKS, no Helm. It combines Liferay's documented self-hosted installation (Docker image and Tomcat bundle, Cluster Link, remote Elasticsearch) with common AWS practice (Terraform, Application Load Balancer, RDS, EFS, Systems Manager, GitHub OIDC). AWS console labels and instance types change; follow AWS documentation where it differs from this guide.
@@ -760,7 +760,7 @@ scripts/run-on-stack.sh "${STACK}" liferay 'curl -s "http://127.0.0.1:9200/_cat/
 curl -sL "${URL}/search?q=liferay" | grep -oE '[0-9]+ Results? for'
 ```
 
-Expected `green liferay-<company-id> <documents>` among the indexes (about 480 documents on a new site), and `2 Results for`. In the browser, **Control Panel → System → Search** shows an active connection to Elasticsearch 8.19.
+Expected `green liferay-<company-id> <documents>` among the indexes (about 480 documents on a new site), and `2 Results for`. In the browser, **Control Panel → Configuration → Search** shows an active connection to Elasticsearch 8.19.
 
 ✅ Sign-in is recorded. After you sign in:
 
@@ -921,29 +921,56 @@ curl -sL https://liferay.example.com | grep -o 'http://liferay.example.com' | he
 
 ## 11. Validate the deployment
 
+> ✅ **Tested on 22 October 2026** in Asia Pacific (Tokyo), single mode with the Docker runtime: every row below except HA failover.
+
 Run the end-to-end check from the repository root:
 
 ```bash
 scripts/verify-deployment.sh
 ```
 
-✅ Expected: every target `healthy`, `PASS` for both URLs through the ALB, `All checks passed` on every instance, and `Deployment verified`.
+✅ Expected: every target `healthy`, `PASS` for both URLs through the ALB, `All checks passed` on every instance, and `Deployment verified`. In testing it took about 20 seconds:
 
-Then check by hand:
+```text
+== 1. Load balancer targets
+i-...	healthy	None
+PASS  all targets healthy
+
+== 2. Liferay through the load balancer
+PASS  http://liferay-poc-<n>.ap-northeast-1.elb.amazonaws.com/c/portal/robots -> 200
+PASS  http://liferay-poc-<n>.ap-northeast-1.elb.amazonaws.com/ -> 200
+
+== 3. Instance checks (verify-node.sh through SSM)
+--- liferay-poc-liferay-1 (i-...)
+...
+All checks passed
+
+Deployment verified
+```
+
+Then check by hand. Control Panel paths are as in DXP 2026.Q1: open the applications menu and choose the **Control Panel** tab (next to **Applications** and **Commerce**), where links are grouped under **Users**, **Sites**, **Accounts**, **Configuration**, **Notifications**, **Object**, **Security**, **System** and **Marketplace**.
 
 | Check | How | Expected |
 | --- | --- | --- |
 | Home page | Browser, `liferay_url` | Loads with CSS and images |
 | Sign-in | `test@liferay.com` with the password from SSM (then your new one) | Signed in |
-| License | **Control Panel → Configuration → License Manager** 🔎 (or the log line from `verify-node.sh`) | Your license, correct expiry, node count for HA |
-| Search | **Control Panel → System → Search** | Connection active, Elasticsearch 8.19.x |
-| Reindex | **Control Panel → Configuration → Search → Index Actions → Reindex all search indexes** | Completes without errors |
-| Documents | Upload a file in **Site → Content & Data → Documents and Media** | Upload succeeds and downloads |
-| Persistence | Restart Liferay (`docker restart liferay` / `systemctl restart liferay`) and reload | Content and the document are still there |
+| License | **Control Panel → Marketplace → License Manager** (or the log line from `verify-node.sh`) | Your license, correct expiry, node count for HA |
+| Search | **Control Panel → Configuration → Search** | Connection active, Elasticsearch 8.19.x |
+| Reindex | **Control Panel → Configuration → Search → Index Actions → Reindex all search indexes** | Completes without errors. On a new site it finished in seconds; the log shows `Finished reindexing company ... with execution mode full` |
+| Documents | Upload a file in the site menu → **Content & Data → Documents and Media** (**New → File Upload**) | Upload succeeds and downloads. An image also gets Adaptive Media renditions (preview and thumbnail) |
+| Persistence | Restart Liferay (`docker restart liferay` / `systemctl restart liferay`), wait for it (about 35 seconds), and reload | Content and the document are still there, and the ALB target is `healthy` again |
 | Database | Single: `docker exec postgres psql -U liferay -d lportal -c 'select webid from company;'` on the instance | Returns `liferay.com` |
-| Exposure | `nc -vz <instance-public-ip> 8080` from your workstation (single mode) | Times out: only the ALB can reach 8080 |
-| No SSH | `aws ec2 describe-security-groups --group-names <stack>-liferay` | No port 22 rule |
+| Exposure | Find the instance's public IP (single mode) with `aws ec2 describe-instances --filters "Name=tag:LiferayStack,Values=${STACK}" --query 'Reservations[0].Instances[0].PublicIpAddress' --output text`, then from your workstation `nc -vz -G 5 <public-ip> 8080` (also 22, 5432, 9200; on Linux use `-w 5` instead of `-G 5`) | No answer on any port: only the ALB can reach 8080 |
+| No SSH | `aws ec2 describe-security-groups --filters "Name=group-name,Values=${STACK}-liferay" --query 'SecurityGroups[0].IpPermissions[].[FromPort, ToPort, UserIdGroupPairs[0].GroupId]' --output text` | Only `8080 8080 sg-...` (the ALB's security group); no port 22 rule. Use `--filters`, not `--group-names`: `--group-names` only finds groups in the default VPC and fails with `InvalidGroup.NotFound` |
 | HA failover | Section 9, verify steps 5 and 6 | Site stays up; caches stay in sync |
+
+✅ Confirm the upload and the persistence test on the instance (single mode):
+
+```bash
+scripts/run-on-stack.sh "${STACK}" liferay "docker exec postgres psql -U liferay -d lportal -At -F ' | ' -c 'select title, mimetype, size_, createdate from dlfileentry order by createdate desc limit 1;'"
+```
+
+Expected the file you uploaded, with its size in bytes; the same row after the restart. A new site already has about 15 documents (images from the site template), so look for your file's title rather than a count.
 
 ---
 
@@ -1038,7 +1065,7 @@ Push to `main`, or start it by hand: **Actions → CI/CD → Run workflow**.
    - Add the **EC2 Sample React App** widget (category **Client Extensions**). It shows *Hello from React on Amazon EC2*, then *Signed in as Test Test (test@liferay.com), read from /o/headless-admin-user*, which proves the React app called Liferay's API with your session. The button counts clicks. Signed out, it says you are a guest.
    - Under the page's **Design → CSS Client Extensions**, add **EC2 Sample Global CSS**: the page gets an orange top border.
    - In HA, both widgets show the same on every node.
-   - **Control Panel → Applications → Client Extensions** lists **EC2 Sample Global CSS** and **EC2 Sample React App**.
+   - The product menu's **Applications** tab → **Client Extensions** lists **EC2 Sample Global CSS** and **EC2 Sample React App**. 🔎
 
 ---
 
@@ -1120,7 +1147,7 @@ aws ssm get-parameters-by-path --path "/${STACK}" --query 'length(Parameters)'
 | ALB target `unhealthy` with `Health checks failed with these codes: [500]`; every page returns 500; Liferay log shows `Invalid host name <ip or alb-dns-name>` | The host name is not in `virtual.hosts.valid.hosts` (section 8.1). Stacks created before this guide added `ALB_DNS_NAME` (October 2026) have it missing | Add it and re-render: `scripts/run-on-stack.sh <stack> liferay "grep -q '^ALB_DNS_NAME=' /etc/liferay-ec2/host.env \|\| echo 'ALB_DNS_NAME=<alb-dns-name>' >> /etc/liferay-ec2/host.env; aws s3 sync s3://<artifact-bucket>/host/ /opt/liferay-ec2/ --only-show-errors; chmod 755 /opt/liferay-ec2/scripts/*.sh; /opt/liferay-ec2/scripts/render-config.sh; docker restart liferay; /opt/liferay-ec2/scripts/wait-for-liferay.sh"` (Tomcat runtime: `systemctl restart liferay`) |
 | ALB target stays `unhealthy` with another code or a timeout; Liferay log shows `Server startup` | Health check path or port | `curl -i http://127.0.0.1:8080/c/portal/robots` on the instance; it must return 200 |
 | Login history and audit logs show `10.20.x.x` for every user | Liferay sees the ALB's IP, not `X-Forwarded-For` | Section 8, "What else to expect in the log" |
-| No emails arrive (password changes, invitations); log says `Skipping email because the sender is not specified` | No mail server configured | Configure SMTP (for example Amazon SES) in **Control Panel → Server Administration → Mail** or in `portal-ext.properties` |
+| No emails arrive (password changes, invitations); log says `Skipping email because the sender is not specified` | No mail server configured | Configure SMTP (for example Amazon SES) in **Control Panel → System → Server Administration → Mail** or in `portal-ext.properties` |
 | Liferay never finishes starting; log mentions license | Missing or invalid key, or single-node key in a cluster | Check `/opt/liferay/deploy`, the license log lines, and use a cluster-capable key for HA |
 | Liferay shuts down soon after start, log mentions Elasticsearch | Wrong Elasticsearch version or unreachable | `curl http://<es>:9200`; keep 8.19.x; check the search security group |
 | Elasticsearch container restarts; log mentions `max virtual memory areas` | `vm.max_map_count` too low | `sysctl vm.max_map_count`; re-run the bootstrap |
