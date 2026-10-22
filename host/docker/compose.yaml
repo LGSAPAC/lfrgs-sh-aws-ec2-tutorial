@@ -1,0 +1,83 @@
+# Liferay stack for one EC2 instance. bootstrap.sh writes .env next to this file and picks
+# the services with COMPOSE_PROFILES:
+#
+#   Single instance, Docker runtime   liferay,db,search
+#   Single instance, Tomcat runtime   db,search        (Liferay runs as a systemd service)
+#   High availability, Liferay node   liferay          (Docker runtime; RDS and the search node are separate)
+#   High availability, search node    search
+#
+# Every service uses host networking: Liferay binds its JGroups cluster ports to the
+# instance's own IP, and the Tomcat runtime reaches PostgreSQL and Elasticsearch on
+# 127.0.0.1 exactly like the Docker runtime does. Security groups limit who can connect.
+
+name: liferay
+
+services:
+  liferay:
+    profiles: [liferay]
+    image: ${LIFERAY_IMAGE:?set LIFERAY_IMAGE in .env}
+    container_name: liferay
+    network_mode: host
+    restart: unless-stopped
+    stop_grace_period: 2m
+    environment:
+      LIFERAY_JVM_OPTS: ${LIFERAY_JVM_OPTS:--Xms6g -Xmx6g}
+    ulimits:
+      nofile: { soft: 65536, hard: 65536 }
+    volumes:
+      # portal-ext.properties, OSGi configs, JGroups files and the license, rendered by
+      # render-config.sh. The image copies /etc/liferay/mount/files into /opt/liferay at startup.
+      - /opt/liferay-ec2/runtime/files:/etc/liferay/mount/files:ro
+      - liferay-data:/opt/liferay/data
+      # Documents and Media: a local folder on one instance, EFS in high availability.
+      - ${LIFERAY_DOCLIB_DIR:?set LIFERAY_DOCLIB_DIR in .env}:/opt/liferay/data/document_library
+    logging:
+      driver: json-file
+      options: { max-size: 100m, max-file: "5" }
+
+  postgres:
+    profiles: [db]
+    image: postgres:${POSTGRES_VERSION:-16}
+    container_name: postgres
+    network_mode: host
+    restart: unless-stopped
+    command: ["postgres", "-c", "listen_addresses=127.0.0.1", "-c", "max_connections=200"]
+    environment:
+      POSTGRES_DB: ${DB_NAME:-lportal}
+      POSTGRES_USER: ${DB_USER:-liferay}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      retries: 12
+
+  elasticsearch:
+    profiles: [search]
+    # Built on the instance by bootstrap.sh from elasticsearch/Dockerfile (adds Liferay's analysis plugins).
+    image: liferay-elasticsearch:${ES_VERSION:-8.19.20}
+    pull_policy: never
+    container_name: elasticsearch
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      cluster.name: liferay
+      discovery.type: single-node
+      network.host: ${ES_NETWORK_HOST:-127.0.0.1}
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms${ES_HEAP:-2g} -Xmx${ES_HEAP:-2g}
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile: { soft: 65536, hard: 65536 }
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://127.0.0.1:9200/_cluster/health?wait_for_status=yellow&timeout=5s"]
+      interval: 15s
+      retries: 20
+
+volumes:
+  liferay-data:
+  postgres-data:
+  elasticsearch-data:

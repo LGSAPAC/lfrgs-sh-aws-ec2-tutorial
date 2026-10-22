@@ -1,0 +1,16 @@
+# Terraform
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/*.tfvars
+!terraform/*.tfvars.example
+terraform/*.tfplan
+crash.log
+
+# Never commit a license, keys or rendered secrets
+license/*.xml
+*.pem
+*.key
+.env
+
+.DS_Store

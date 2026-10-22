@@ -1,0 +1,17 @@
+#!/bin/bash
+# EC2 user data: writes this instance's settings, copies the host files from S3 and runs the
+# bootstrap. Output: /var/log/liferay-ec2-bootstrap.log
+set -euo pipefail
+
+mkdir -p /etc/liferay-ec2 /opt/liferay-ec2
+
+cat > /etc/liferay-ec2/host.env <<'HOSTENV'
+%{ for key, value in host_env ~}
+${key}=${value}
+%{ endfor ~}
+HOSTENV
+
+aws s3 sync "s3://${bucket}/host/" /opt/liferay-ec2/ --only-show-errors --region "${region}"
+chmod 755 /opt/liferay-ec2/scripts/*.sh
+
+/opt/liferay-ec2/scripts/bootstrap.sh 2>&1 | tee -a /var/log/liferay-ec2-bootstrap.log

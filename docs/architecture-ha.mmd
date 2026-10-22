@@ -1,0 +1,41 @@
+flowchart LR
+    users(["PoC users<br/>allowed_cidrs"])
+    gha(["GitHub Actions<br/>sample workspace"])
+
+    subgraph region["AWS region"]
+        ecr[("ECR<br/>dxp-custom images")]
+        s3[("S3 artifact bucket")]
+        ssm["Systems Manager<br/>Run Command, one node at a time"]
+
+        subgraph vpc["VPC 10.20.0.0/16"]
+            alb["Application Load Balancer<br/>sticky sessions<br/>public subnets, 2 AZs"]
+            nat["NAT gateway<br/>outbound for all instances"]
+
+            subgraph aza["Private subnet AZ a"]
+                dxp1["Liferay node 1<br/>EC2 m6i.xlarge<br/>Docker or Tomcat"]
+                es["Elasticsearch 8.19<br/>EC2 m6i.large"]
+                rdsa[("RDS PostgreSQL 16<br/>primary")]
+            end
+
+            subgraph azb["Private subnet AZ b"]
+                dxp2["Liferay node 2<br/>EC2 m6i.xlarge<br/>Docker or Tomcat"]
+                rdsb[("RDS standby<br/>Multi-AZ")]
+            end
+
+            efs[("EFS<br/>Documents and Media<br/>mount targets in both AZs")]
+        end
+    end
+
+    users -- "HTTP(S)" --> alb
+    alb -- "8080" --> dxp1
+    alb -- "8080" --> dxp2
+    dxp1 <-- "Cluster Link<br/>TCP 7800-7801" --> dxp2
+    dxp1 & dxp2 -- "5432<br/>(JGROUPSPING table<br/>for discovery)" --> rdsa
+    rdsa -. "sync replication" .-> rdsb
+    dxp1 & dxp2 -- "9200" --> es
+    dxp1 & dxp2 -- "NFS 2049" --> efs
+    gha -- "OIDC" --> ecr
+    gha -- "OIDC" --> ssm
+    ssm -. "rolling deploy" .-> dxp1
+    ssm -. "rolling deploy" .-> dxp2
+    alb ~~~ nat

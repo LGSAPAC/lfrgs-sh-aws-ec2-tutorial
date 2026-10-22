@@ -1,0 +1,35 @@
+flowchart LR
+    users(["PoC users<br/>allowed_cidrs"])
+    admin(["Admin workstation<br/>Terraform, AWS CLI"])
+    gha(["GitHub Actions<br/>sample workspace"])
+
+    subgraph region["AWS region"]
+        ecr[("ECR<br/>dxp-custom images")]
+        s3[("S3 artifact bucket<br/>host files, license,<br/>Tomcat builds")]
+        ssm["Systems Manager<br/>Session Manager, Run Command,<br/>Parameter Store secrets"]
+
+        subgraph vpc["VPC 10.20.0.0/16"]
+            alb["Application Load Balancer<br/>HTTP 80 / HTTPS 443<br/>public subnets, 2 AZs"]
+
+            subgraph pub["Public subnet AZ a"]
+                subgraph ec2["EC2 m6i.xlarge, Amazon Linux 2023, gp3 100 GiB"]
+                    dxp["Liferay DXP 2026.Q1 LTS :8080<br/>Docker container or<br/>Tomcat bundle (systemd)"]
+                    pg["PostgreSQL 16<br/>container, 127.0.0.1:5432"]
+                    es["Elasticsearch 8.19<br/>container, 127.0.0.1:9200"]
+                    dl[("Documents and Media<br/>local folder on EBS")]
+                end
+            end
+        end
+    end
+
+    users -- "HTTP(S)" --> alb
+    alb -- "HTTP 8080<br/>health /c/portal/robots" --> dxp
+    dxp --> pg
+    dxp --> es
+    dxp --- dl
+    admin -- "terraform apply" --> region
+    gha -- "OIDC: push image" --> ecr
+    gha -- "OIDC: send-command" --> ssm
+    ssm -. "deploy-docker.sh /<br/>deploy-tomcat.sh" .-> ec2
+    s3 -. "boot: host files, license" .-> ec2
+    ecr -. "image pull" .-> ec2

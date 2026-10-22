@@ -1,0 +1,35 @@
+# Copy to terraform.tfvars and edit. terraform.tfvars is git-ignored.
+
+region = "ap-southeast-1"
+name   = "liferay-poc"
+
+# single (one instance) or ha (ALB + 2 Liferay nodes + RDS Multi-AZ + EFS + search node)
+deployment_mode = "single"
+
+# docker (container) or tomcat (Tomcat bundle as a systemd service)
+liferay_runtime = "docker"
+
+liferay_version       = "2026.q1.13-lts"
+elasticsearch_version = "8.19.20"
+
+# Who may open Liferay. Find your IP with: curl -s https://checkip.amazonaws.com
+allowed_cidrs = ["203.0.113.10/32"]
+
+# Your activation key, copied here locally (see license/README.md).
+license_file = "../license/license.xml"
+
+# The sample workspace repository whose GitHub Actions deploy to this stack.
+github_repository = "LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace"
+
+# Set to false if the account already has the GitHub OIDC provider.
+create_github_oidc_provider = true
+
+# HTTPS and a custom host name (section 10). Leave empty for HTTP on the ALB DNS name.
+acm_certificate_arn = ""
+virtual_host        = ""
+
+# High availability sizing (used when deployment_mode = "ha")
+# liferay_node_count   = 2
+# liferay_heap         = "8g"
+# elasticsearch_heap   = "4g"
+# db_instance_class    = "db.m6g.large"
