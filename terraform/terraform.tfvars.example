@@ -1,6 +1,6 @@
 # Copy to terraform.tfvars and edit. terraform.tfvars is git-ignored.
 
-region = "ap-southeast-1"
+region = "ap-northeast-1"
 name   = "liferay-poc"
 
 # single (one instance) or ha (ALB + 2 Liferay nodes + RDS Multi-AZ + EFS + search node)

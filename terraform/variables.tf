@@ -1,5 +1,5 @@
 variable "region" {
-  description = "AWS region for every resource, for example ap-southeast-1."
+  description = "AWS region for every resource, for example ap-northeast-1."
   type        = string
 }
 

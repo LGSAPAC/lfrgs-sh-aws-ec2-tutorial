@@ -3,10 +3,10 @@
 **Product:** Liferay DXP 2026.Q1 LTS (`2026.q1.13-lts`), self-hosted on Amazon EC2, deployed with Docker (or the traditional Tomcat bundle)
 **Audience:** Partner and customer technical teams setting up a sandbox or proof-of-concept (PoC) environment
 **Prepared by:** Liferay Customer Success APAC
-**Status:** Draft, October 2026. Not yet applied to a real AWS account. The Terraform passes `terraform validate`, every shell script passes ShellCheck, and the sample workspace's build and `linux/amd64` image jobs passed in GitHub Actions on 22 October 2026 ([run 39708712711](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace/actions/runs/39708712711)). Items to confirm are marked **🔎 Verify**.
+**Status:** Draft, October 2026. Sections 3 and 4 (tools and AWS access) tested on 22 October 2026 in Asia Pacific (Tokyo); section 2 partly tested; sections 5 onwards not yet run on AWS. The Terraform passes `terraform validate`, every shell script passes ShellCheck, and the sample workspace's build and `linux/amd64` image jobs passed in GitHub Actions on 22 October 2026 ([run 39708712711](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace/actions/runs/39708712711)). Items to confirm are marked **🔎 Verify**.
 
-> ⚠️ **Read this first: this is a planning draft, not a tested runbook.**
-> This guide builds Liferay on plain EC2 instances: no Kubernetes, no EKS, no Helm. It combines Liferay's documented self-hosted installation (Docker image and Tomcat bundle, Cluster Link, remote Elasticsearch) with common AWS practice (Terraform, Application Load Balancer, RDS, EFS, Systems Manager, GitHub OIDC). AWS console labels and instance types change; follow AWS documentation where it differs from this guide.
+> ⚠️ **Read this first: this is a draft, only partly tested.**
+> Sections that have been run on a real AWS account are marked **✅ Tested** or **🟡 Partly tested**; the others have not been run yet. This guide builds Liferay on plain EC2 instances: no Kubernetes, no EKS, no Helm. It combines Liferay's documented self-hosted installation (Docker image and Tomcat bundle, Cluster Link, remote Elasticsearch) with common AWS practice (Terraform, Application Load Balancer, RDS, EFS, Systems Manager, GitHub OIDC). AWS console labels and instance types change; follow AWS documentation where it differs from this guide.
 
 > ⚠️ **Handle credentials with care.** This guide uses placeholders such as `<region>`, `<stack>` and `<account-id>`. Generated passwords live in SSM Parameter Store and in the Terraform state; nothing secret is committed. Never paste access keys, passwords or license files into documents, slides, chat, tickets or Git.
 
@@ -79,7 +79,7 @@ Two deployment modes and two ways to run Liferay, chosen with two Terraform vari
 | **Outbound internet** | Public IP (inbound only from the ALB) | NAT gateway |
 | **Secrets** | SSM Parameter Store (SecureString) | Same |
 | **Admin access** | SSM Session Manager (no SSH, no open ports) | Same |
-| **Rough cost** 🔎 | About USD 250 per month in `ap-southeast-1` | About USD 900 per month |
+| **Rough cost** 🔎 | About USD 250 per month in `ap-northeast-1` (Tokyo) | About USD 900 per month |
 
 | | `liferay_runtime = "docker"` (recommended) | `liferay_runtime = "tomcat"` |
 | --- | --- | --- |
@@ -108,15 +108,17 @@ The diagram sources are in [`docs/`](docs/) (Mermaid). After editing one, re-ren
 
 ## 2. Prerequisites
 
+> 🟡 **Partly tested on 22 October 2026:** 2.1 and 2.2 with an AWS account in Asia Pacific (Tokyo). 2.3 (license) not yet.
+
 ### 2.1 AWS account
 
-- An AWS account you may create resources in, with a payment method. A **dedicated sandbox account** (for example from AWS Organizations) is best.
+- An AWS account you may create resources in, with a payment method. A **dedicated sandbox account** (for example from AWS Organizations) is best. A personal account works for a PoC; agree reimbursement in advance and tear down when finished.
 - A **budget alert** (Billing → Budgets) at a figure you are comfortable with, so a forgotten stack can't run up a large bill. Tear down when finished (section 15).
-- Default service quotas are enough: 1 VPC, 1 Elastic IP (HA mode), 1 ALB, up to 7 vCPUs of standard instances (single) or about 14 (HA).
+- Default service quotas are enough: 1 VPC, 1 Elastic IP (HA mode), 1 ALB, up to 7 vCPUs of standard instances (single) or about 14 (HA). A new account already has the **default VPC**; this guide creates its own VPC next to it and leaves the default one alone.
 
 ### 2.2 Region
 
-Pick one region for everything; this guide uses **Asia Pacific (Singapore), `ap-southeast-1`** in examples. Any commercial region with at least two Availability Zones and `m6i` instances works.
+Pick one region for everything. This guide was tested in **Asia Pacific (Tokyo), `ap-northeast-1`** and uses it in examples. Any commercial region with at least two Availability Zones and `m6i` instances works, for example Singapore (`ap-southeast-1`) or Sydney (`ap-southeast-2`).
 
 ### 2.3 Liferay license
 
@@ -142,23 +144,34 @@ git check-ignore license/license.xml           # prints the path: it will never 
 
 ## 3. Install the command-line tools
 
+> ✅ **Tested on 22 October 2026** on macOS (Apple Silicon) with Homebrew.
+
 | Tool | Version | Purpose |
 | --- | --- | --- |
-| AWS CLI | v2 | Access check, SSM commands, verification |
-| Session Manager plugin | current | Shell on instances without SSH (`aws ssm start-session`) |
-| Terraform | 1.9 or later (tested: `terraform validate` with 1.17.0) | Provision everything |
-| jq | any | JSON parsing in the scripts |
-| GitHub CLI (`gh`) | current | Set the workspace's Actions variables (section 12) |
-| Git | any | Clone the repositories |
-| JDK 21 | optional | Only to build the sample workspace locally |
+| AWS CLI | v2 (tested: 2.38.4) | Access check, SSM commands, verification |
+| Session Manager plugin | current (tested: 1.2.896.0) | Shell on instances without SSH (`aws ssm start-session`) |
+| Terraform | 1.9 or later (tested: 1.17.0) | Provision everything |
+| jq | any (tested: 1.8.1) | JSON parsing in the scripts |
+| GitHub CLI (`gh`) | current (tested: 2.92.0) | Set the workspace's Actions variables (section 12) |
+| Git | any (tested: 2.50.1) | Clone the repositories |
+| JDK 21 | optional (tested: 21.0.12) | Only to build the sample workspace locally |
 
 ### macOS (Homebrew)
+
+Run each line on its own and wait for it to finish:
 
 ```bash
 brew install awscli jq gh git
 brew install --cask session-manager-plugin
 brew tap hashicorp/tap && brew install hashicorp/tap/terraform
 ```
+
+What to expect:
+
+- **`Do you want to proceed with the installation? [y/n]`**: newer Homebrew versions may list what they will install and ask first. Type `y`.
+- **`Password:`** while installing `session-manager-plugin`: its installer runs with `sudo`. Type your **Mac login password** in the terminal and press Return. Nothing appears while you type; that is normal. If your Mac account is not an administrator, ask IT to install the plugin; everything except interactive shells on the instances (`aws ssm start-session`) still works without it.
+- **Terraform is not in Homebrew's main repository** (licence change), which is why it comes from the `hashicorp/tap`.
+- **`Warning: A newer Command Line Tools release is available`**: harmless for this guide. Update from **System Settings → General → Software Update** when convenient.
 
 ### Linux / WSL 2
 
@@ -172,94 +185,154 @@ session-manager-plugin --version
 terraform version              # 1.9 or later
 jq --version
 gh --version
+git --version
 ```
 
-✅ Expected: every command prints a version; none says `command not found`.
+✅ Expected: every command prints a version; none says `command not found`. Tested output:
+
+```text
+aws-cli/2.38.4 Python/3.15.0 Darwin/25.5.0 source/arm64
+1.2.896.0
+Terraform v1.17.0
+jq-1.8.1
+gh version 2.92.0 (2026-04-28)
+git version 2.50.1 (Apple Git-155)
+```
 
 ---
 
 ## 4. Set up AWS access
 
+> ✅ **Tested on 22 October 2026** in Asia Pacific (Tokyo) with an IAM user and an access key (4.2 Option A, 4.3 Option A).
+
+Two identities are used:
+
+- **The root user** (the email address the account was created with), only for one-off account tasks: MFA, billing and budgets, and creating the PoC user if nobody else can.
+- **A PoC identity** for everything else, from the console or the CLI: an IAM user (Option A) or an IAM Identity Center user (Option B).
+
+**Which option?** If you sign in to the AWS console with an **account ID or alias, a user name and a password**, or you only have the root user, use **Option A**. If you sign in through an **access portal** (`https://<something>.awsapps.com/start`, often from an Okta, Google or Microsoft tile), your company uses IAM Identity Center: use **Option B**. Not sure? Search your email for "AWS IAM Identity Center" or "Invitation to join"; if you find nothing, use Option A.
+
 ### 4.1 Secure the root user
 
 Signed in as the account's **root user**: turn on **MFA**, create **no access keys**, and set the budget alert from section 2.1. Use the root user for nothing else.
 
-### 4.2 Create an identity for the PoC
+### 4.2 Create the PoC identity
 
-Use **IAM Identity Center** (recommended) or an IAM user:
+Both options need the same permissions: the AWS managed policy **`PowerUserAccess`** (everything except IAM) **plus** this inline policy, which lets Terraform create only this stack's two IAM roles (`liferay-poc-instance`, `liferay-poc-github-actions`), its instance profile and the GitHub OIDC provider. If you will use another stack `name` (section 5), replace `liferay-poc` here to match.
 
-- **IAM Identity Center:** create a user, assign it to the account with the **`PowerUserAccess`** permission set **plus** an inline policy that lets Terraform create this stack's two IAM roles (`<name>-instance`, `<name>-github-actions`) and the GitHub OIDC provider. Replace `liferay-poc` if you use another stack `name`:
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ManageStackRoles",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole", "iam:DeleteRole", "iam:GetRole", "iam:TagRole", "iam:UntagRole",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:PutRolePolicy", "iam:GetRolePolicy", "iam:DeleteRolePolicy", "iam:ListRolePolicies",
+        "iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:ListAttachedRolePolicies",
+        "iam:ListInstanceProfilesForRole",
+        "iam:CreateInstanceProfile", "iam:DeleteInstanceProfile", "iam:GetInstanceProfile",
+        "iam:AddRoleToInstanceProfile", "iam:RemoveRoleFromInstanceProfile", "iam:TagInstanceProfile"
+      ],
+      "Resource": [
+        "arn:aws:iam::*:role/liferay-poc-*",
+        "arn:aws:iam::*:instance-profile/liferay-poc-*"
+      ]
+    },
+    {
+      "Sid": "PassInstanceRoleToEc2Only",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::*:role/liferay-poc-instance",
+      "Condition": { "StringEquals": { "iam:PassedToService": "ec2.amazonaws.com" } }
+    },
+    {
+      "Sid": "ManageGitHubOidcProvider",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateOpenIDConnectProvider", "iam:DeleteOpenIDConnectProvider",
+        "iam:GetOpenIDConnectProvider", "iam:TagOpenIDConnectProvider"
+      ],
+      "Resource": "arn:aws:iam::*:oidc-provider/token.actions.githubusercontent.com"
+    },
+    {
+      "Sid": "ListForChecks",
+      "Effect": "Allow",
+      "Action": ["iam:ListRoles", "iam:ListOpenIDConnectProviders"],
+      "Resource": "*"
+    }
+  ]
+}
+```
 
-  ```json
-  {
-    "Version": "2012-10-17",
-    "Statement": [
-      {
-        "Sid": "ManageStackRoles",
-        "Effect": "Allow",
-        "Action": [
-          "iam:CreateRole", "iam:DeleteRole", "iam:GetRole", "iam:TagRole", "iam:UntagRole",
-          "iam:UpdateAssumeRolePolicy",
-          "iam:PutRolePolicy", "iam:GetRolePolicy", "iam:DeleteRolePolicy", "iam:ListRolePolicies",
-          "iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:ListAttachedRolePolicies",
-          "iam:ListInstanceProfilesForRole",
-          "iam:CreateInstanceProfile", "iam:DeleteInstanceProfile", "iam:GetInstanceProfile",
-          "iam:AddRoleToInstanceProfile", "iam:RemoveRoleFromInstanceProfile", "iam:TagInstanceProfile"
-        ],
-        "Resource": [
-          "arn:aws:iam::*:role/liferay-poc-*",
-          "arn:aws:iam::*:instance-profile/liferay-poc-*"
-        ]
-      },
-      {
-        "Sid": "PassInstanceRoleToEc2Only",
-        "Effect": "Allow",
-        "Action": "iam:PassRole",
-        "Resource": "arn:aws:iam::*:role/liferay-poc-instance",
-        "Condition": { "StringEquals": { "iam:PassedToService": "ec2.amazonaws.com" } }
-      },
-      {
-        "Sid": "ManageGitHubOidcProvider",
-        "Effect": "Allow",
-        "Action": [
-          "iam:CreateOpenIDConnectProvider", "iam:DeleteOpenIDConnectProvider",
-          "iam:GetOpenIDConnectProvider", "iam:TagOpenIDConnectProvider"
-        ],
-        "Resource": "arn:aws:iam::*:oidc-provider/token.actions.githubusercontent.com"
-      },
-      {
-        "Sid": "ListForChecks",
-        "Effect": "Allow",
-        "Action": ["iam:ListRoles", "iam:ListOpenIDConnectProviders"],
-        "Resource": "*"
-      }
-    ]
-  }
-  ```
+- `iam:PassRole` is limited to the instance role and to EC2, so this identity can't hand any other role to any service. Don't widen it to `"Resource": "*"`: the IAM console warns that PassRole on a wildcard is overly permissive, and it is right.
+- The two list actions stay on `*` because AWS doesn't support narrowing them; they are read-only and used by the access check (4.4).
+- Avoid `AdministratorAccess`, especially in shared or personal accounts.
 
-  `iam:PassRole` is limited to the instance role and to EC2, so this user can't hand any other role to any service.
+#### Option A: IAM user with an access key (tested)
 
-- **IAM user (if Identity Center is not available):** same permissions, console access with MFA, and an access key for the CLI stored only in your own `~/.aws/credentials`.
-- Avoid `AdministratorAccess` in shared accounts. For production, scope the policy to the resources Terraform manages.
+Signed in as the **root user** (or an administrator), open **IAM → Users → Create user**:
+
+1. **User name:** `liferay-poc`. Leave **Provide user access to the AWS Management Console** unticked unless a person needs the console (then require MFA).
+2. **Permissions:** **Attach policies directly** → tick **`PowerUserAccess`** → **Next** → **Create user**.
+3. Open the user → **Permissions** → **Add permissions** → **Create inline policy** → **JSON**. Replace the contents with the policy above → **Next** → name it **`liferay-poc-iam`** → **Create policy**.
+4. **Security credentials** tab → **Create access key** → use case **Command Line Interface (CLI)** → tick the confirmation → **Next** → **Create access key**.
+5. The **secret access key is shown once only**. Keep the page open, or **Download .csv file** and store it in a password manager. Never paste it into chat, email, documents, tickets or Git. If you lose it, create a new access key and **deactivate and delete** the old one.
+
+#### Option B: IAM Identity Center
+
+In **IAM Identity Center**, create a user, then a **permission set** with the managed policy `PowerUserAccess` and the inline policy above, and assign the user and permission set to the PoC account. The user receives an invitation email with the **AWS access portal URL** (`https://<something>.awsapps.com/start`); you need it in 4.3.
 
 ### 4.3 Configure the CLI
 
-Run this in **your own terminal**:
+Run this in **your own terminal** (not in a shared screen or chat).
+
+#### Option A: IAM user
 
 ```bash
-# IAM Identity Center
-aws configure sso --profile liferay-poc
-aws sso login --profile liferay-poc
-
-# or, IAM user with an access key
 aws configure --profile liferay-poc
 ```
 
-Then select the profile and region for the whole session:
+| Prompt | Value |
+| --- | --- |
+| `AWS Access Key ID` | From 4.2 step 5 (starts with `AKIA`) |
+| `AWS Secret Access Key` | From 4.2 step 5 |
+| `Default region name` | Your PoC region, for example `ap-northeast-1` (Tokyo) |
+| `Default output format` | `json` |
+
+Notes from testing:
+
+- Recent CLI versions print **`Tip: You can deliver temporary credentials ... by running the command 'aws login'`** first. Ignore it; the access key is what this guide uses.
+- Recent CLI versions may finish with **`Configure AWS skills and the AWS MCP server for your AI coding agent(s)? [y/n/never]`**. Answer **`n`** (or `never` to stop the question). It is an optional add-on that changes your AI tools' configuration; nothing in this guide needs it. The profile is already saved when the question appears.
+- The CLI stores the key in `~/.aws/credentials`, readable only by your user. Treat that file as a secret.
+
+#### Option B: IAM Identity Center
+
+```bash
+aws configure sso --profile liferay-poc
+```
+
+| Prompt | Value |
+| --- | --- |
+| `SSO session name` | `liferay-poc` (a local label) |
+| `SSO start URL` | Your AWS access portal URL from 4.2 Option B |
+| `SSO region` | The region your Identity Center lives in (ask your AWS administrator; often `us-east-1`) |
+| `SSO registration scopes` | Press Return for the default |
+| *(browser opens)* | Approve the request, then pick the **account** and the **role** (permission set) |
+| `Default client Region` | Your PoC region, for example `ap-northeast-1` |
+| `CLI default output format` | `json` |
+
+If you don't have a portal URL, your organization doesn't use Identity Center: press **Ctrl+C** and use Option A. The SSO login lasts a few hours; renew it with `aws sso login --profile liferay-poc`.
+
+#### Both options
+
+Select the profile and region for the whole terminal session:
 
 ```bash
 export AWS_PROFILE=liferay-poc
-export AWS_REGION=ap-southeast-1
+export AWS_REGION=ap-northeast-1
 ```
 
 ### 4.4 Verify access
@@ -267,16 +340,49 @@ export AWS_REGION=ap-southeast-1
 Run the read-only check. It creates nothing and costs nothing:
 
 ```bash
-scripts/check-aws-access.sh ap-southeast-1
+scripts/check-aws-access.sh ap-northeast-1
 ```
 
-✅ Expected: the identity shows your user or role ARN (not `root`), every service shows **OK**, and the last line is `All services reachable`. Note whether a GitHub OIDC provider is listed: if so, set `create_github_oidc_provider = false` in section 5.
+✅ Expected: the identity is your IAM user or Identity Center role (**not** `root`), every service shows **OK**, and the last line is `All services reachable`. Tested output (Option A, a new account):
+
+```text
+Identity:
+{
+    "UserId": "AIDA...",
+    "Account": "<account-id>",
+    "Arn": "arn:aws:iam::<account-id>:user/liferay-poc"
+}
+
+OK    Region ap-northeast-1        3
+OK    EC2                          0
+OK    VPC quota (VPCs in use)      1
+OK    Elastic IPs in use           0
+OK    Load balancers (ELBv2)       0
+OK    RDS                          0
+OK    EFS                          0
+OK    S3                           0
+OK    ECR                          0
+OK    SSM                          0
+OK    IAM (roles)                  3
+OK    IAM (OIDC providers)         0
+OK    ACM                          0
+OK    AL2023 AMI parameter         ami-0cef3c44c19f4cfec
+
+GitHub OIDC provider already in this account (set create_github_oidc_provider = false if listed):
+  none
+
+All services reachable
+```
+
+The numbers are counts of what already exists: `Region` shows the number of Availability Zones (Tokyo has 3), `VPC ... 1` is the default VPC, and `IAM (roles) 3` are AWS service-linked roles. The AMI ID differs by region and date. If a GitHub OIDC provider **is** listed, set `create_github_oidc_provider = false` in section 5.
 
 | Result | Cause | Fix |
 | --- | --- | --- |
-| `No valid AWS credentials` / `ExpiredToken` | SSO session expired or wrong profile | `aws sso login --profile liferay-poc`; check `AWS_PROFILE` |
-| `AccessDenied` / `UnauthorizedOperation` on one service | Missing permission | Add `PowerUserAccess` and the IAM policy from 4.2 |
-| IAM rows fail | `PowerUserAccess` alone excludes IAM | Add the inline IAM policy from 4.2 |
+| `No valid AWS credentials` / `InvalidClientTokenId` | Wrong or deleted access key, or wrong profile | Check `AWS_PROFILE`; create a new access key (4.2 step 4) and re-run 4.3 |
+| `ExpiredToken` / `Token has expired` (Option B) | SSO session expired | `aws sso login --profile liferay-poc` |
+| Identity ARN ends in `:root` | Using root credentials | Stop; create the PoC identity (4.2) and delete the root access key |
+| `AccessDenied` / `UnauthorizedOperation` on one service | Missing permission | Check `PowerUserAccess` is attached (4.2) |
+| IAM rows fail with `AccessDenied` | `PowerUserAccess` alone excludes IAM | Add the inline policy from 4.2 |
 | `Could not connect to the endpoint URL` | Region typo or region not enabled | Check `AWS_REGION`; enable opt-in regions in the account settings |
 
 ---
@@ -291,7 +397,7 @@ Edit `terraform/terraform.tfvars`. The important settings:
 
 | Variable | Example | Notes |
 | --- | --- | --- |
-| `region` | `ap-southeast-1` | Same as `AWS_REGION` |
+| `region` | `ap-northeast-1` | Same as `AWS_REGION` |
 | `name` | `liferay-poc` | Stack name: prefixes resources, tags instances `LiferayStack=<name>`, names SSM parameters `/<name>/...` |
 | `deployment_mode` | `single` or `ha` | Section 1 |
 | `liferay_runtime` | `docker` or `tomcat` | Section 1 |
@@ -620,7 +726,7 @@ For anything beyond a quick test, serve Liferay over HTTPS on your own host name
 3. **Set the variables** in `terraform.tfvars`:
 
    ```hcl
-   acm_certificate_arn = "arn:aws:acm:ap-southeast-1:<account-id>:certificate/<id>"
+   acm_certificate_arn = "arn:aws:acm:ap-northeast-1:<account-id>:certificate/<id>"
    virtual_host        = "liferay.example.com"
    ```
 
