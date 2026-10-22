@@ -980,7 +980,7 @@ Expected the file you uploaded, with its size in bytes; the same row after the r
 
 ## 12. CI/CD with GitHub Actions
 
-> ✅ **Tested on 22 October 2026** in Asia Pacific (Tokyo), single mode with the Docker runtime ([run 39725947441](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace/actions/runs/39725947441)): build, push to ECR through OIDC, deploy through SSM, and the portlet and both client extensions deployed. The Tomcat runtime's deploy is not yet tested.
+> ✅ **Tested on 22 October 2026** in Asia Pacific (Tokyo), single mode with the Docker runtime ([run 39725947441](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace/actions/runs/39725947441)): build, push to ECR through OIDC, deploy through SSM, and the portlet, the global CSS and the React app all working on a page. The Tomcat runtime's deploy is not yet tested.
 
 Your code (OSGi modules, client extensions, configuration) lives in a **Liferay Workspace** and reaches the instances through GitHub Actions. A ready-made workspace for this guide is **[LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace)** (DXP `2026.q1.13-lts`, a sample OSGi portlet, a global CSS client extension and a React custom element client extension built with Vite).
 
@@ -1097,10 +1097,10 @@ Tested timings (single mode): `build` 1 minute, `image` 4 minutes (about 3.1 GB,
 
    Expected `200` with a JavaScript and a CSS content type. A `404` means the zip didn't deploy, or its `assemble` block is wrong.
 
-5. ✅ In Liferay, signed in, edit a page:
+5. ✅ In Liferay, signed in, edit a page (all three tested on 22 October 2026):
    - Add the **EC2 Sample** widget (category **Sample**). It shows *Hello from Liferay self-hosted on Amazon EC2* and the serving node.
    - Add the **EC2 Sample React App** widget (category **Client Extensions**). It shows *Hello from React on Amazon EC2*, then *Signed in as Test Test (test@liferay.com), read from /o/headless-admin-user*, which proves the React app called Liferay's API with your session. The button counts clicks. Signed out, it says you are a guest.
-   - Under the page's **Design → CSS Client Extensions**, add **EC2 Sample Global CSS**: the page gets an orange top border.
+   - Turn on **EC2 Sample Global CSS** for a page: site menu → **Site Builder → Pages** → the page's **⋮** → **Configure** → **Design** tab → **CSS Client Extensions** → **Add CSS Client Extensions** → select it → **Add** → **Save**. To apply it to every page, use the configuration of the pages list itself instead of one page's. The page gets a thin orange border along the top edge; hard-refresh, and sign out or use a private window if the control bar hides it.
    - In HA, both widgets show the same on every node.
    - The product menu's **Applications** tab → **Client Extensions** lists **EC2 Sample Global CSS** and **EC2 Sample React App**. 🔎
 
