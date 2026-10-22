@@ -3,7 +3,7 @@
 **Product:** Liferay DXP 2026.Q1 LTS (`2026.q1.13-lts`), self-hosted on Amazon EC2, deployed with Docker (or the traditional Tomcat bundle)
 **Audience:** Partner and customer technical teams setting up a sandbox or proof-of-concept (PoC) environment
 **Prepared by:** Liferay Customer Success APAC
-**Status:** Draft, October 2026. Sections 3 and 4 (tools and AWS access) tested on 22 October 2026 in Asia Pacific (Tokyo); section 2 partly tested; sections 5 onwards not yet run on AWS. The Terraform passes `terraform validate`, every shell script passes ShellCheck, and the sample workspace's build and `linux/amd64` image jobs passed in GitHub Actions on 22 October 2026 ([run 39708712711](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace/actions/runs/39708712711)). Items to confirm are marked **🔎 Verify**.
+**Status:** Draft, October 2026. Sections 2 to 7 (prerequisites, tools, AWS access, Terraform plan and apply, instance bootstrap) tested on 22 October 2026 in Asia Pacific (Tokyo), single mode with the Docker runtime; sections 8 onwards not yet run on AWS. The Terraform passes `terraform validate`, every shell script passes ShellCheck, and the sample workspace's build and `linux/amd64` image jobs passed in GitHub Actions on 22 October 2026 ([run 39708712711](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace/actions/runs/39708712711)). Items to confirm are marked **🔎 Verify**.
 
 > ⚠️ **Read this first: this is a draft, only partly tested.**
 > Sections that have been run on a real AWS account are marked **✅ Tested** or **🟡 Partly tested**; the others have not been run yet. This guide builds Liferay on plain EC2 instances: no Kubernetes, no EKS, no Helm. It combines Liferay's documented self-hosted installation (Docker image and Tomcat bundle, Cluster Link, remote Elasticsearch) with common AWS practice (Terraform, Application Load Balancer, RDS, EFS, Systems Manager, GitHub OIDC). AWS console labels and instance types change; follow AWS documentation where it differs from this guide.
@@ -102,13 +102,13 @@ The diagram sources are in [`docs/`](docs/) (Mermaid). After editing one, re-ren
 
 **Responsibilities when self-hosting:** Liferay supports the DXP image and bundle. Your team owns the AWS account, network, instances, database, search, storage, TLS, DNS, backups, monitoring, patching and secrets.
 
-**Time required:** about 1 hour for single mode and 1.5 to 2 hours for high availability, most of it waiting for RDS and the first Liferay start.
+**Time required:** about 1 hour for single mode the first time, most of it setting up tools and AWS access (sections 3 and 4). In testing, `terraform apply` took 3.5 minutes and the instance bootstrap under 5 minutes. High availability adds 15 to 20 minutes for RDS Multi-AZ.
 
 ---
 
 ## 2. Prerequisites
 
-> 🟡 **Partly tested on 22 October 2026:** 2.1 and 2.2 with an AWS account in Asia Pacific (Tokyo). 2.3 (license) not yet.
+> ✅ **Tested on 22 October 2026** with an AWS account in Asia Pacific (Tokyo) and a DXP Development activation key.
 
 ### 2.1 AWS account
 
@@ -138,7 +138,9 @@ grep -c '<license' license/license.xml         # prints 1 or more
 git check-ignore license/license.xml           # prints the path: it will never be committed
 ```
 
-✅ Expected: the file exists, contains a `<license>` element, and `git check-ignore` prints its path.
+✅ Expected: the file exists, `grep -c` prints 1 or more (a typical key prints `4`: it matches `<license>`, `<license-name>`, `<license-type>` and `<license-version>`), and `git check-ignore` prints `license/license.xml`.
+
+💡 Open the file and check `<license-type>` and `<expiration-date>`. A **developer** key (`DXP Development`) works for single mode; it allows one node and a few concurrent sessions (`<max-http-sessions>`), so it is not enough for high availability (section 9).
 
 ---
 
@@ -389,6 +391,10 @@ The numbers are counts of what already exists: `Region` shows the number of Avai
 
 ## 5. Choose your options
 
+> ✅ **Tested on 22 October 2026** in Asia Pacific (Tokyo): single mode, Docker runtime, Terraform 1.17.0 with the AWS provider 6.69.1 and the random provider 3.9.1.
+
+Run every command from here on from the **repository root** (`lfrgs-sh-aws-ec2-tutorial/`), in a terminal where `AWS_PROFILE` and `AWS_REGION` are exported (section 4.3; export them again in every new terminal). Terraform commands use `-chdir=terraform`, so you never need to `cd`.
+
 ```bash
 cp terraform/terraform.tfvars.example terraform/terraform.tfvars
 ```
@@ -403,7 +409,7 @@ Edit `terraform/terraform.tfvars`. The important settings:
 | `liferay_runtime` | `docker` or `tomcat` | Section 1 |
 | `liferay_version` | `2026.q1.13-lts` | Image tag `liferay/dxp:<version>` and the Tomcat bundle. Latest promoted release in <https://releases.liferay.com/releases.json> |
 | `elasticsearch_version` | `8.19.20` | The sidecar version DXP 2026.Q1.13 ships with |
-| `allowed_cidrs` | `["203.0.113.10/32"]` | Who can open Liferay. Find your IP with `curl -s https://checkip.amazonaws.com` |
+| `allowed_cidrs` | `["203.0.113.10/32"]` | Who can open Liferay. Find your IP with `curl -s https://checkip.amazonaws.com` and add `/32`. If your IP changes (another network, VPN), update it and `terraform -chdir=terraform apply` |
 | `license_file` | `../license/license.xml` | Uploaded to S3 by Terraform |
 | `github_repository` | `LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace` | Repository allowed to deploy (section 12). Empty skips the CI/CD role |
 | `create_github_oidc_provider` | `true` | `false` if the account already has one (section 4.4) |
@@ -416,23 +422,35 @@ Edit `terraform/terraform.tfvars`. The important settings:
 ### Verify
 
 ```bash
-cd terraform
-terraform init
-terraform validate
-terraform plan -out=liferay.tfplan
+terraform -chdir=terraform init
+terraform -chdir=terraform validate
+terraform -chdir=terraform plan -out=liferay.tfplan
 ```
 
-✅ Expected: `Success! The configuration is valid.`, then a plan ending with `Plan: N to add, 0 to change, 0 to destroy.` (about 45 resources in single mode and 60 in HA). Read the plan: the `aws_instance.liferay` count should match your mode, and `aws_s3_object.license[0]` should appear (if it does not, `license_file` was not found).
+✅ Expected:
+
+- `init`: `Installed hashicorp/aws v6.x` and `Installed hashicorp/random v3.x` (both `signed by HashiCorp`), then `Terraform has been successfully initialized!`. The versions come from the committed `.terraform.lock.hcl`.
+- `validate`: `Success! The configuration is valid.`
+- `plan`: ends with **`Plan: 58 to add, 0 to change, 0 to destroy.`** in single mode (tested). HA adds RDS, EFS, the NAT gateway, the search instance and their security groups, about 80 in total (🔎 not yet tested).
+
+Read the plan before applying. In single mode it should contain:
+
+- `aws_instance.liferay[0]` with `instance_type = "m6i.xlarge"`, and no `aws_instance.search`, `aws_db_instance` or `aws_nat_gateway`;
+- `aws_s3_object.license[0]` (if it is missing, `license_file` was not found);
+- 13 `aws_s3_object.host_files[...]` (the files under `host/`);
+- `aws_vpc_security_group_ingress_rule.alb_http["<your-ip>/32"]`: only your IP can reach the load balancer.
 
 ---
 
 ## 6. Provision the infrastructure
 
+> ✅ **Tested on 22 October 2026** in Asia Pacific (Tokyo), single mode.
+
 ```bash
-terraform apply liferay.tfplan
+terraform -chdir=terraform apply liferay.tfplan
 ```
 
-Single mode takes about 5 minutes; HA takes 15 to 20 minutes, mostly RDS Multi-AZ. Terraform returns once the AWS resources exist; the instances keep bootstrapping for another 10 to 20 minutes (section 7).
+Applying a saved plan doesn't ask for confirmation. Single mode took **3 minutes 25 seconds** in testing (`Apply complete! Resources: 58 added, 0 changed, 0 destroyed.`); HA takes 15 to 20 minutes, mostly RDS Multi-AZ. Terraform returns once the AWS resources exist; the instances keep bootstrapping for a few more minutes (section 7). From this point the stack is billed until you tear it down (section 15).
 
 What gets created:
 
@@ -455,15 +473,36 @@ What gets created:
 ### Verify
 
 ```bash
-terraform output
+terraform -chdir=terraform output
 ```
 
-✅ Expected: `liferay_url`, `liferay_instance_ids`, `artifact_bucket`, `ecr_repository_url`, `github_actions_role_arn` and `license_uploaded = true`. In HA mode also `db_endpoint` (an `rds.amazonaws.com` name), `efs_id` and `search_instance_id`.
+✅ Expected (single mode, tested; `<account-id>` is your 12-digit account ID):
 
-✅ Every instance is running and registered with Systems Manager (this can take 2 to 3 minutes after the apply):
+```text
+admin_password_command = "aws ssm get-parameter --name /liferay-poc/liferay/admin-password --with-decryption ..."
+alb_dns_name = "liferay-poc-<number>.ap-northeast-1.elb.amazonaws.com"
+artifact_bucket = "liferay-poc-artifacts-<account-id>-ap-northeast-1"
+db_endpoint = "127.0.0.1 (container on the Liferay instance)"
+deployment = "single / docker"
+ecr_repository_url = "<account-id>.dkr.ecr.ap-northeast-1.amazonaws.com/liferay-poc/dxp-custom"
+github_actions_role_arn = "arn:aws:iam::<account-id>:role/liferay-poc-github-actions"
+github_variables_commands = <<EOT
+gh variable set AWS_REGION --repo ... (six commands, used in section 12)
+EOT
+license_uploaded = true
+liferay_instance_ids = [
+  "i-...",
+]
+liferay_url = "http://liferay-poc-<number>.ap-northeast-1.elb.amazonaws.com"
+stack_name = "liferay-poc"
+```
+
+`license_uploaded` must be `true`. In HA mode `db_endpoint` is an `rds.amazonaws.com` name, and `efs_id` and `search_instance_id` are set.
+
+✅ Every instance is running and registered with Systems Manager (in testing it was `Online` by the time the apply finished; allow up to 3 minutes):
 
 ```bash
-STACK=$(terraform output -raw stack_name)
+STACK=$(terraform -chdir=terraform output -raw stack_name)
 
 aws ec2 describe-instances \
   --filters "Name=tag:LiferayStack,Values=${STACK}" "Name=instance-state-name,Values=running" \
@@ -475,20 +514,29 @@ aws ssm describe-instance-information \
   --query 'InstanceInformationList[].[InstanceId, PingStatus, PlatformName]' --output table
 ```
 
-Every instance shows `Online` and `Amazon Linux`. In HA mode, the Liferay nodes are in **two different** Availability Zones.
+Every instance shows `Online` and `Amazon Linux`. Tested output, single mode:
+
+```text
+|  liferay-poc-liferay-1 |  i-...  |  10.20.1.14 |  ap-northeast-1a |
+|  i-...  |  Online  |  Amazon Linux  |
+```
+
+In HA mode, the Liferay nodes are in **two different** Availability Zones.
 
 ✅ The host files and license reached S3:
 
 ```bash
-aws s3 ls "s3://$(terraform output -raw artifact_bucket)/" --recursive | grep -E 'host/scripts/bootstrap.sh|license/license.xml'
+aws s3 ls "s3://$(terraform -chdir=terraform output -raw artifact_bucket)/" --recursive | grep -E 'host/scripts/bootstrap.sh|license/license.xml'
 ```
+
+Expected: two lines, `host/scripts/bootstrap.sh` and `license/license.xml` (the size of your key file).
 
 ✅ HA only: RDS is Multi-AZ and EFS is available:
 
 ```bash
 aws rds describe-db-instances --db-instance-identifier "${STACK}" \
   --query 'DBInstances[0].[DBInstanceStatus, MultiAZ, Engine, EngineVersion, AvailabilityZone, SecondaryAvailabilityZone]' --output text
-aws efs describe-file-systems --file-system-id "$(terraform output -raw efs_id)" \
+aws efs describe-file-systems --file-system-id "$(terraform -chdir=terraform output -raw efs_id)" \
   --query 'FileSystems[0].[LifeCycleState, NumberOfMountTargets, Encrypted]' --output text
 ```
 
@@ -498,11 +546,13 @@ Expected `available  True  postgres  16.x  <az-a>  <az-b>` and `available  2  Tr
 
 ## 7. How each instance is bootstrapped
 
-Nothing in this section needs to be typed: it explains what runs on each instance and how to watch it.
+> ✅ **Tested on 22 October 2026** in Asia Pacific (Tokyo), single mode with the Docker runtime: the bootstrap finished **4 minutes 39 seconds** after the instance booted, with no warnings or errors in its log.
+
+Nothing in this section needs to be typed except the checks: it explains what runs on each instance and how to watch it.
 
 1. **User data** ([`terraform/templates/user-data.sh.tftpl`](terraform/templates/user-data.sh.tftpl)) writes `/etc/liferay-ec2/host.env`: the stack name, mode, role (`liferay` or `search`), runtime, database and search addresses, versions and heap sizes. No secrets.
 2. It copies `s3://<artifact-bucket>/host/` (this repository's `host/` folder) to `/opt/liferay-ec2` and runs [`bootstrap.sh`](host/scripts/bootstrap.sh).
-3. **`bootstrap.sh`** installs Docker and the Compose plugin, sets `vm.max_map_count=262144` where Elasticsearch runs, mounts EFS (HA Liferay nodes), and calls **[`render-config.sh`](host/scripts/render-config.sh)**, which:
+3. **`bootstrap.sh`** installs Docker and the Compose plugin (Amazon Linux 2023's `docker` package doesn't include Compose, so it is downloaded from Docker's GitHub releases), sets `vm.max_map_count=262144` where Elasticsearch runs, mounts EFS (HA Liferay nodes), and calls **[`render-config.sh`](host/scripts/render-config.sh)**, which:
    - reads the database and admin passwords from SSM Parameter Store;
    - writes `/opt/liferay-ec2/runtime/files/portal-ext.properties` (JDBC, admin password, proxy headers, HTTPS, virtual host, and Cluster Link in HA);
    - writes the Elasticsearch 8 OSGi config (`networkHostAddresses`, `productionModeEnabled`);
@@ -511,11 +561,36 @@ Nothing in this section needs to be typed: it explains what runs on each instanc
 4. It builds the Elasticsearch image with the analysis plugins (where needed), starts PostgreSQL and Elasticsearch, then Liferay: `docker compose up -d liferay` (Docker runtime; the image copies `/etc/liferay/mount/files` into `/opt/liferay` at startup), or installs the Tomcat bundle and starts the `liferay` service (Tomcat runtime; `ExecStartPre` copies the same files into `/opt/liferay`).
 5. It waits until `http://127.0.0.1:8080/c/portal/robots` returns 200 (the ALB health check), then writes `/opt/liferay-ec2/runtime/bootstrap.done`.
 
+What it looked like in testing (single mode, Docker runtime; times in UTC from `/var/log/liferay-ec2-bootstrap.log`):
+
+| Time | Elapsed | Step |
+| --- | --- | --- |
+| 03:41:00 | 0:00 | Instance boots |
+| 03:41:05 | 0:05 | `Bootstrapping liferay-poc: mode=single role=liferay runtime=docker` |
+| 03:41:48 | 0:48 | `Installing Docker Compose v5.6.1` |
+| 03:41:51 | 0:51 | `Rendering configuration`, `License copied from s3://...`, `Configuration rendered (profiles: liferay db search)` |
+| 03:41:51 | 0:51 | `Building liferay-elasticsearch:8.19.20` (about 1 minute) |
+| 03:42:47 | 1:47 | `Starting postgres elasticsearch` (both healthy within 25 seconds) |
+| 03:43:11 | 2:11 | `Starting Liferay container liferay/dxp:2026.q1.13-lts` (image pull included) |
+| 03:45:39 | 4:39 | `Liferay is ready`, `Bootstrap finished` |
+
+The rendered files on the instance (single mode; HA adds `files/jgroups/control.xml` and `transport.xml`):
+
+```text
+/opt/liferay-ec2/runtime/bootstrap.done
+/opt/liferay-ec2/runtime/files/deploy/license.xml
+/opt/liferay-ec2/runtime/files/osgi/configs/com.liferay.portal.search.elasticsearch8.configuration.ElasticsearchConfiguration.config
+/opt/liferay-ec2/runtime/files/portal-ext.properties
+/opt/liferay-ec2/docker/.env
+```
+
+> 💡 **Why the files belong to `ec2-user`:** they are owned by UID 1000, the user the Liferay container (and the Tomcat runtime's `liferay` user) runs as. On Amazon Linux 2023, UID 1000 is also the default `ec2-user` account, so `ls -l` shows `ec2-user`. `portal-ext.properties` and `.env` contain the database password: SSM sessions run as `ssm-user` and need `sudo` to read them, but anyone who logs in as `ec2-user` can. Don't add SSH keys for `ec2-user`; for production, consider a dedicated UID.
+
 Every step is safe to run again. After changing the host files (or `host.env`), re-sync and re-run on every instance:
 
 ```bash
 scripts/run-on-stack.sh "${STACK}" all \
-  'aws s3 sync s3://'"$(terraform output -raw artifact_bucket)"'/host/ /opt/liferay-ec2/ --only-show-errors && chmod 755 /opt/liferay-ec2/scripts/*.sh && /opt/liferay-ec2/scripts/bootstrap.sh'
+  'aws s3 sync s3://'"$(terraform -chdir=terraform output -raw artifact_bucket)"'/host/ /opt/liferay-ec2/ --only-show-errors && chmod 755 /opt/liferay-ec2/scripts/*.sh && /opt/liferay-ec2/scripts/bootstrap.sh'
 ```
 
 ### Watch it
@@ -523,7 +598,7 @@ scripts/run-on-stack.sh "${STACK}" all \
 Open a shell on an instance (no SSH needed):
 
 ```bash
-aws ssm start-session --target "$(terraform output -json liferay_instance_ids | jq -r '.[0]')"
+aws ssm start-session --target "$(terraform -chdir=terraform output -json liferay_instance_ids | jq -r '.[0]')"
 sudo tail -f /var/log/liferay-ec2-bootstrap.log
 ```
 
@@ -533,7 +608,31 @@ sudo tail -f /var/log/liferay-ec2-bootstrap.log
 scripts/run-on-stack.sh "${STACK}" all 'tail -3 /var/log/liferay-ec2-bootstrap.log; cat /opt/liferay-ec2/runtime/bootstrap.done'
 ```
 
-✅ Expected on each instance: `Bootstrap finished. Check this instance with: ...` and a timestamp. If an instance shows `ERROR:` or the log stops, see section 16.
+✅ Expected on each instance (tested output):
+
+```text
+--- liferay-poc-liferay-1 (i-...): Success
+Waiting up to 1800s for http://127.0.0.1:8080/c/portal/robots ...
+Liferay is ready
+[liferay-ec2 03:45:39] Bootstrap finished. Check this instance with: sudo /opt/liferay-ec2/scripts/verify-node.sh
+2026-10-22T03:45:39Z
+```
+
+✅ The containers are up and healthy (single mode, Docker runtime):
+
+```bash
+scripts/run-on-stack.sh "${STACK}" all 'docker ps --format "{{.Names}} {{.Status}}"'
+```
+
+Expected `liferay Up ... (healthy)`, `postgres Up ... (healthy)` and `elasticsearch Up ... (healthy)`.
+
+✅ The log has no warnings or errors:
+
+```bash
+scripts/run-on-stack.sh "${STACK}" all 'grep -ciE "warn|error|fail" /var/log/liferay-ec2-bootstrap.log || true'
+```
+
+Expected `0` (the `|| true` stops `grep` from reporting a clean log as a failure). If a check shows `Failed`, an instance shows `ERROR:`, or the log stops growing, see section 16. If `bootstrap.done` is missing after 20 minutes, read the full log with `tail -100 /var/log/liferay-ec2-bootstrap.log`.
 
 ---
 
@@ -566,13 +665,13 @@ cat /opt/liferay-ec2/runtime/files/portal-ext.properties   # contains the DB pas
 The first start takes 10 to 15 minutes (database creation and index set-up). Wait for `Server startup in [n] milliseconds` in the Liferay log, then open the URL:
 
 ```bash
-terraform output -raw liferay_url
+terraform -chdir=terraform output -raw liferay_url
 ```
 
 Sign in as **`test@liferay.com`** with the generated password:
 
 ```bash
-$(terraform output -raw admin_password_command)
+$(terraform -chdir=terraform output -raw admin_password_command)
 ```
 
 Liferay may ask you to change the password and accept the terms of use on first sign-in. Store the new password in your password manager.
@@ -684,7 +783,7 @@ The ALB spreads users across nodes with **sticky sessions** (`lb_cookie`, 1 day)
 3. The discovery table is populated:
 
    ```bash
-   aws ssm start-session --target "$(terraform output -json liferay_instance_ids | jq -r '.[0]')"
+   aws ssm start-session --target "$(terraform -chdir=terraform output -json liferay_instance_ids | jq -r '.[0]')"
    sudo docker run --rm --network host postgres:16 \
      psql "postgresql://liferay:$(sudo bash -c 'source /opt/liferay-ec2/scripts/common.sh && get_secret db/password')@$(grep DB_HOST /etc/liferay-ec2/host.env | cut -d= -f2)/lportal" \
      -c 'select cluster_name, own_addr from jgroupsping;'
@@ -722,7 +821,7 @@ The ALB spreads users across nodes with **sticky sessions** (`lb_cookie`, 1 day)
 For anything beyond a quick test, serve Liferay over HTTPS on your own host name.
 
 1. **Request a certificate** in AWS Certificate Manager, in the **same region** as the ALB, for your host name (for example `liferay.example.com`), with DNS validation. Add the validation CNAME in your DNS and wait for **Issued**.
-2. **Point DNS at the ALB:** a Route 53 **alias A record** to the ALB, or a CNAME at another DNS provider, to `terraform output -raw alb_dns_name`.
+2. **Point DNS at the ALB:** a Route 53 **alias A record** to the ALB, or a CNAME at another DNS provider, to `terraform -chdir=terraform output -raw alb_dns_name`.
 3. **Set the variables** in `terraform.tfvars`:
 
    ```hcl
@@ -733,7 +832,7 @@ For anything beyond a quick test, serve Liferay over HTTPS on your own host name
 4. **Apply and re-render.** `terraform apply` adds the 443 listener and the HTTP→HTTPS redirect. The instances' `host.env` was written at boot, so update `HTTPS` and `VIRTUAL_HOST` there and restart Liferay:
 
    ```bash
-   terraform apply
+   terraform -chdir=terraform apply
    scripts/run-on-stack.sh "${STACK}" liferay \
      "sed -i 's/^HTTPS=.*/HTTPS=true/; s/^VIRTUAL_HOST=.*/VIRTUAL_HOST=liferay.example.com/' /etc/liferay-ec2/host.env \
       && /opt/liferay-ec2/scripts/render-config.sh \
@@ -818,7 +917,7 @@ If you use your own copy, set `github_repository = "<org>/<your-workspace>"` in 
 Terraform prints the exact commands:
 
 ```bash
-terraform output -raw github_variables_commands
+terraform -chdir=terraform output -raw github_variables_commands
 ```
 
 Run them (they set `AWS_REGION`, `AWS_ROLE_ARN`, `ECR_REPOSITORY`, `ARTIFACT_BUCKET`, `LIFERAY_STACK` and `LIFERAY_RUNTIME` as repository **variables**; none of them is a secret).
@@ -902,8 +1001,7 @@ Consistent backups: Liferay's database and Documents and Media must be restored 
 ## 15. Tear down the environment
 
 ```bash
-cd terraform
-terraform destroy
+terraform -chdir=terraform destroy
 ```
 
 With `force_destroy = true` (the default), this deletes the S3 bucket and its objects, the ECR images and the RDS instance **without a final snapshot**. Take any backups you need first.
@@ -951,7 +1049,7 @@ aws ssm get-parameters-by-path --path "/${STACK}" --query 'length(Parameters)'
 | Redirect loop | HTTPS redirect configured in two places | Redirect only at the ALB |
 | Large uploads fail | ALB idle timeout (300 s here) or Liferay upload limits | Raise `idle_timeout`; check Liferay's upload size settings |
 | GitHub Actions: `Not authorized to perform sts:AssumeRoleWithWebIdentity` | Repository name, branch or environment doesn't match the role's trust policy | `github_repository` in tfvars must be `owner/name` exactly; deploy job must use environment `ec2`; run on `main` or a `v*` tag |
-| GitHub Actions deploy: `No running instances tagged ...` | `LIFERAY_STACK` variable wrong | Set it to `terraform output -raw stack_name` |
+| GitHub Actions deploy: `No running instances tagged ...` | `LIFERAY_STACK` variable wrong | Set it to `terraform -chdir=terraform output -raw stack_name` |
 | Deploy rolls back: `New image did not become ready` | Your build fails to start | Read the 200 log lines in the job output; fix and push again |
 | `exec format error` | ARM image on x86 instances | Build with `--platform linux/amd64` (the workflow does) |
 | Docker Hub `toomanyrequests` | Anonymous pull rate limit | Retry later, sign in to Docker Hub on the instance, or mirror `liferay/dxp`, `postgres` and Elasticsearch to ECR |
