@@ -27,6 +27,16 @@ ADMIN_PASSWORD=$(get_secret liferay/admin-password)
 PRIVATE_IP=$(imds local-ipv4)
 JDBC_URL="jdbc:postgresql://${DB_HOST}:5432/${DB_NAME}"
 
+# Liferay's default valid hosts, plus this instance's IP, the load balancer and the virtual host.
+valid_hosts() {
+	local hosts="localhost,127.0.0.1,[::1],[0:0:0:0:0:0:0:1],${PRIVATE_IP}"
+
+	[ -n "${ALB_DNS_NAME:-}" ] && hosts="${hosts},${ALB_DNS_NAME}"
+	[ -n "${VIRTUAL_HOST:-}" ] && hosts="${hosts},${VIRTUAL_HOST}"
+
+	echo "${hosts}"
+}
+
 log "Rendering configuration for ${STACK} (${MODE}, ${ROLE}, ${RUNTIME}) on ${PRIVATE_IP}"
 
 if is_liferay_node; then
@@ -45,6 +55,11 @@ if is_liferay_node; then
 		echo "# Behind the Application Load Balancer"
 		echo "web.server.forwarded.host.enabled=true"
 		echo "web.server.forwarded.protocol.enabled=true"
+		echo
+		echo "# Host names Liferay answers to. Anything else gets HTTP 500 (\"Invalid host name\")."
+		echo "# The ALB health check uses this instance's private IP; browsers use the ALB DNS"
+		echo "# name, or the virtual host once you have one."
+		echo "virtual.hosts.valid.hosts=$(valid_hosts)"
 
 		if [ "${HTTPS}" = "true" ]; then
 			echo "web.server.protocol=https"

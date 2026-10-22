@@ -34,11 +34,14 @@ container_healthy() {
 	[[ "${state}" == running* ]] && [[ "${state}" != *unhealthy* ]] && [[ "${state}" != *starting* ]]
 }
 
+# Usage: http_200 <url> [host-header]
 http_200() {
 	local code
+	local args=(-s -o /dev/null -w '%{http_code}' --max-time 15)
 
-	code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$1")
-	echo "HTTP ${code} from $1"
+	[ -n "${2:-}" ] && args+=(-H "Host: $2")
+	code=$(curl "${args[@]}" "$1")
+	echo "HTTP ${code} from $1${2:+ (Host: $2)}"
 	[ "${code}" = "200" ]
 }
 
@@ -132,6 +135,18 @@ if is_liferay_node; then
 	check "Database reachable" tcp_open "${DB_HOST}" 5432
 	check "Elasticsearch reachable" es_health "${ES_URL}"
 	check "Liferay HTTP on 8080" http_200 http://127.0.0.1:8080/c/portal/robots
+	# The same requests the load balancer sends: health checks use the instance IP as the host,
+	# browsers use the ALB DNS name. Liferay answers 500 to host names it doesn't trust.
+	check "Accepts ALB health-check host" http_200 http://127.0.0.1:8080/c/portal/robots "$(imds local-ipv4)"
+
+	if [ -n "${ALB_DNS_NAME:-}" ]; then
+		check "Accepts ALB host name" http_200 http://127.0.0.1:8080/c/portal/robots "${ALB_DNS_NAME}"
+	fi
+
+	if [ -n "${VIRTUAL_HOST:-}" ]; then
+		check "Accepts virtual host" http_200 http://127.0.0.1:8080/c/portal/robots "${VIRTUAL_HOST}"
+	fi
+
 	check "Server started" log_contains 'Server startup in'
 	check "License registered" log_contains '[Ll]icense (registered|validation passed)|[Ll]icense.*valid'
 	check "No license errors" no_license_errors
