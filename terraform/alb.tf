@@ -16,15 +16,18 @@ resource "aws_lb_target_group" "liferay" {
   port                 = 8080
   protocol             = "HTTP"
   vpc_id               = aws_vpc.main.id
-  deregistration_delay = 60
+  deregistration_delay = 30
 
+  # A node that stops answering is taken out after 2 failed checks 10 s apart (about 20 s).
+  # With 5 checks 30 s apart, users stuck to a crashed node got HTTP 502 for about 2.5 minutes.
+  # Planned restarts don't rely on this: the deploy scripts take the node out first.
   health_check {
     path                = "/c/portal/robots"
     matcher             = "200"
-    interval            = 30
-    timeout             = 10
+    interval            = 10
+    timeout             = 5
     healthy_threshold   = 2
-    unhealthy_threshold = 5
+    unhealthy_threshold = 2
   }
 
   stickiness {

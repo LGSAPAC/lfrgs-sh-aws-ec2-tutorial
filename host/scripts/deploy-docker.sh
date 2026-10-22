@@ -32,15 +32,18 @@ switch_to() {
 	compose up -d --force-recreate liferay
 }
 
+lb_drain
+
 switch_to "${NEW_IMAGE}"
 
 if "${LIFERAY_EC2_DIR}/scripts/wait-for-liferay.sh" "${DEPLOY_TIMEOUT:-1200}"; then
+	lb_register || fail "Deployed ${NEW_IMAGE}, but the load balancer doesn't see this node as healthy"
 	log "Deployed ${NEW_IMAGE}"
 	docker image prune -f --filter "until=168h" > /dev/null
 else
 	log "New image did not become ready; rolling back to ${OLD_IMAGE}"
 	docker logs --tail 200 liferay || true
 	switch_to "${OLD_IMAGE}"
-	"${LIFERAY_EC2_DIR}/scripts/wait-for-liferay.sh" "${DEPLOY_TIMEOUT:-1200}" || true
+	"${LIFERAY_EC2_DIR}/scripts/wait-for-liferay.sh" "${DEPLOY_TIMEOUT:-1200}" && lb_register
 	fail "Deployment of ${NEW_IMAGE} failed; rolled back to ${OLD_IMAGE}"
 fi

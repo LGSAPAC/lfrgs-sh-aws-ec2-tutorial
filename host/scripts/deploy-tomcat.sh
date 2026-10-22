@@ -45,6 +45,7 @@ fi
 install -o liferay -g liferay -m 644 "${WORK}"/deploy/* "${LIFERAY_HOME}/deploy/"
 
 if [ "${RESTART}" = "true" ]; then
+	lb_drain
 	log "Restarting Liferay to apply the config changes"
 	systemctl restart liferay
 else
@@ -57,6 +58,10 @@ else
 fi
 
 "${LIFERAY_EC2_DIR}/scripts/wait-for-liferay.sh" "${DEPLOY_TIMEOUT:-1200}"
+
+if [ "${RESTART}" = "true" ]; then
+	lb_register || fail "Liferay restarted, but the load balancer doesn't see this node as healthy"
+fi
 
 for JAR in "${WORK}"/deploy/*.jar; do
 	[ -e "${JAR}" ] || continue

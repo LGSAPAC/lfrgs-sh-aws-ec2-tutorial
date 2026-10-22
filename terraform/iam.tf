@@ -39,6 +39,24 @@ resource "aws_iam_role_policy" "instance" {
         Resource = [aws_s3_bucket.artifacts.arn, "${aws_s3_bucket.artifacts.arn}/*"]
       },
       {
+        Sid      = "ReadLoadBalancerTargets"
+        Effect   = "Allow"
+        Action   = ["elasticloadbalancing:DescribeTargetGroups", "elasticloadbalancing:DescribeTargetHealth"]
+        Resource = "*"
+      },
+      {
+        Sid      = "DrainSelfFromLoadBalancer"
+        Effect   = "Allow"
+        Action   = ["elasticloadbalancing:RegisterTargets", "elasticloadbalancing:DeregisterTargets"]
+        Resource = aws_lb_target_group.liferay.arn
+      },
+      {
+        Sid      = "FindFirstNode"
+        Effect   = "Allow"
+        Action   = "ec2:DescribeInstances"
+        Resource = "*"
+      },
+      {
         Sid      = "ReadStackParameters"
         Effect   = "Allow"
         Action   = ["ssm:GetParameter", "ssm:GetParameters"]

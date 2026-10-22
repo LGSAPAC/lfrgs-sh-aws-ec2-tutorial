@@ -57,3 +57,58 @@ compose() {
 is_liferay_node() {
 	[ "${ROLE}" = "liferay" ]
 }
+
+# Planned restarts in high availability: take this node out of the load balancer first, so
+# users are moved to the other nodes instead of getting HTTP 502, and put it back once it is
+# ready. Single mode has no other node to move users to, so these do nothing there.
+
+lb_target_group_arn() {
+	aws elbv2 describe-target-groups --names "${STACK}-liferay" --query 'TargetGroups[0].TargetGroupArn' --output text
+}
+
+lb_target_state() {
+	aws elbv2 describe-target-health --target-group-arn "$1" --targets "Id=$2,Port=8080" \
+		--query 'TargetHealthDescriptions[0].TargetHealth.State' --output text
+}
+
+lb_drain() {
+	[ "${MODE}" = "ha" ] || return 0
+
+	local tg id state=""
+
+	tg=$(lb_target_group_arn)
+	id=$(imds instance-id)
+
+	log "Taking this node out of the load balancer (in-flight requests finish first)"
+	aws elbv2 deregister-targets --target-group-arn "${tg}" --targets "Id=${id},Port=8080"
+
+	for _ in $(seq 1 30); do
+		state=$(lb_target_state "${tg}" "${id}")
+		[ "${state}" = "unused" ] && break
+		sleep 5
+	done
+
+	log "Load balancer state of this node: ${state}"
+}
+
+lb_register() {
+	[ "${MODE}" = "ha" ] || return 0
+
+	local tg id state=""
+
+	tg=$(lb_target_group_arn)
+	id=$(imds instance-id)
+
+	log "Putting this node back into the load balancer"
+	aws elbv2 register-targets --target-group-arn "${tg}" --targets "Id=${id},Port=8080"
+
+	for _ in $(seq 1 36); do
+		state=$(lb_target_state "${tg}" "${id}")
+		[ "${state}" = "healthy" ] && break
+		sleep 5
+	done
+
+	log "Load balancer state of this node: ${state}"
+
+	[ "${state}" = "healthy" ]
+}

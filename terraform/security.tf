@@ -70,6 +70,18 @@ resource "aws_vpc_security_group_ingress_rule" "liferay_cluster" {
   to_port                      = 7801
 }
 
+# Liferay HTTP between nodes, so nodes 2+ can wait for node 1 to finish its first start.
+resource "aws_vpc_security_group_ingress_rule" "liferay_peer_http" {
+  count = local.ha ? 1 : 0
+
+  security_group_id            = aws_security_group.liferay.id
+  description                  = "Liferay HTTP between nodes (first-start ordering)"
+  referenced_security_group_id = aws_security_group.liferay.id
+  ip_protocol                  = "tcp"
+  from_port                    = 8080
+  to_port                      = 8080
+}
+
 resource "aws_vpc_security_group_egress_rule" "liferay_all" {
   security_group_id = aws_security_group.liferay.id
   description       = "Outbound (images, bundle, AWS APIs, RDS, EFS, search)"

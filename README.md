@@ -3,7 +3,7 @@
 **Product:** Liferay DXP 2026.Q1 LTS (`2026.q1.13-lts`), self-hosted on Amazon EC2, deployed with Docker (or the traditional Tomcat bundle)
 **Audience:** Partner and customer technical teams setting up a sandbox or proof-of-concept (PoC) environment
 **Prepared by:** Liferay Customer Success APAC
-**Status:** Draft, October 2026. Sections 2 to 8, 11, 12 and 15 (prerequisites, tools, AWS access, Terraform plan and apply, instance bootstrap, first start and sign-in, validation, CI/CD deploy, teardown) tested on 22 October 2026 in Asia Pacific (Tokyo), single mode with the Docker runtime; sections 9 (high availability), 10 (HTTPS) and 13 not yet run on AWS. The Terraform passes `terraform validate`, every shell script passes ShellCheck, and the sample workspace's build and `linux/amd64` image jobs passed in GitHub Actions on 22 October 2026 ([run 39708712711](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace/actions/runs/39708712711)). Items to confirm are marked **🔎 Verify**.
+**Status:** Draft, October 2026. Sections 2 to 9, 11, 12 and 15 tested on 22 and 23 October 2026 in Asia Pacific (Tokyo) with the Docker runtime: single mode end to end, and high availability (two clustered nodes, RDS Multi-AZ, EFS, failover, cache replication, rolling CI deploy). Not yet run on AWS: section 10 (HTTPS), section 13 (backups and monitoring) and the Tomcat runtime. The Terraform passes `terraform validate`, every shell script passes ShellCheck, and the sample workspace's build and `linux/amd64` image jobs passed in GitHub Actions on 22 October 2026 ([run 39708712711](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace/actions/runs/39708712711)). Items to confirm are marked **🔎 Verify**.
 
 > ⚠️ **Read this first: this is a draft, only partly tested.**
 > Sections that have been run on a real AWS account are marked **✅ Tested** or **🟡 Partly tested**; the others have not been run yet. This guide builds Liferay on plain EC2 instances: no Kubernetes, no EKS, no Helm. It combines Liferay's documented self-hosted installation (Docker image and Tomcat bundle, Cluster Link, remote Elasticsearch) with common AWS practice (Terraform, Application Load Balancer, RDS, EFS, Systems Manager, GitHub OIDC). AWS console labels and instance types change; follow AWS documentation where it differs from this guide.
@@ -102,7 +102,7 @@ The diagram sources are in [`docs/`](docs/) (Mermaid). After editing one, re-ren
 
 **Responsibilities when self-hosting:** Liferay supports the DXP image and bundle. Your team owns the AWS account, network, instances, database, search, storage, TLS, DNS, backups, monitoring, patching and secrets.
 
-**Time required:** about 1 hour for single mode the first time, most of it setting up tools and AWS access (sections 3 and 4). In testing, `terraform apply` took 3.5 minutes and the instance bootstrap under 5 minutes. High availability adds 15 to 20 minutes for RDS Multi-AZ.
+**Time required:** about 1 hour for single mode the first time, most of it setting up tools and AWS access (sections 3 and 4). In testing, `terraform apply` took 3.5 minutes and the instance bootstrap under 5 minutes. High availability adds about 20 minutes: in testing the apply took 16 minutes (RDS Multi-AZ alone 15.5) and both nodes were ready about 6 minutes later.
 
 ---
 
@@ -122,8 +122,17 @@ Pick one region for everything. This guide was tested in **Asia Pacific (Tokyo),
 
 ### 2.3 Liferay license
 
-- **A Liferay DXP activation key** (XML). The 2026.Q1 LTS images and bundles ship **no trial license**: without a key Liferay never becomes ready.
-- **High availability needs a key that allows clustering.** A single-node developer key is not enough for two nodes. Ask your Liferay representative.
+- **A Liferay DXP activation key** (XML). The `liferay/dxp` image ships its own single-node trial key, but this guide turns it off (section 9.6) so only your key is used: without one, Liferay never becomes ready.
+- **High availability needs a key that allows clustering.** Look at `<license-type>`:
+
+  | `<license-type>` | Works for | Example |
+  | --- | --- | --- |
+  | `developer` | Single mode only. Liferay refuses it in a cluster: `Developer licenses do not allow for clustering` | `DXP Development`, often with `<max-http-sessions>5</max-http-sessions>` |
+  | `virtual-cluster` | Single mode and HA, up to `<max-cluster-nodes>` nodes | `DXP Non-Production (Virtual Cluster)`, `<max-cluster-nodes>2</max-cluster-nodes>` (tested) |
+  | `developer-cluster`, `production`, `enterprise` | Depends on the subscription; look for a node or server count in the file | |
+
+  Check yours with `grep -E '<(license-type|license-name|max-cluster-nodes|max-http-sessions|expiration-date)>' license/license.xml`. Keep `liferay_node_count` at or below `<max-cluster-nodes>`. "Liferay Trial Activation" keys come in both kinds, so check the type rather than the account name.
+- Ask your Liferay representative or Liferay Support for a cluster-capable key for DXP 2026.Q1 (7.4).
 - Copy it to `license/license.xml` (see [`license/README.md`](license/README.md)). It is git-ignored; Terraform uploads it to a private S3 bucket.
 
 ### 2.4 GitHub
@@ -432,7 +441,7 @@ terraform -chdir=terraform plan -out=liferay.tfplan
 
 - `init`: `Installed hashicorp/aws v6.x` and `Installed hashicorp/random v3.x` (both `signed by HashiCorp`), then `Terraform has been successfully initialized!`. The versions come from the committed `.terraform.lock.hcl`.
 - `validate`: `Success! The configuration is valid.`
-- `plan`: ends with **`Plan: 58 to add, 0 to change, 0 to destroy.`** in single mode (tested). HA adds RDS, EFS, the NAT gateway, the search instance and their security groups, about 80 in total (🔎 not yet tested).
+- `plan`: ends with **`Plan: 58 to add, 0 to change, 0 to destroy.`** in single mode (tested). In HA: **`Plan: 78 to add, 0 to change, 0 to destroy.`** (tested), adding RDS, EFS, the NAT gateway, the search instance, a second Liferay node and their security groups.
 
 Read the plan before applying. In single mode it should contain:
 
@@ -451,7 +460,7 @@ Read the plan before applying. In single mode it should contain:
 terraform -chdir=terraform apply liferay.tfplan
 ```
 
-Applying a saved plan doesn't ask for confirmation. Single mode took **3 minutes 25 seconds** in testing (`Apply complete! Resources: 58 added, 0 changed, 0 destroyed.`); HA takes 15 to 20 minutes, mostly RDS Multi-AZ. Terraform returns once the AWS resources exist; the instances keep bootstrapping for a few more minutes (section 7). From this point the stack is billed until you tear it down (section 15).
+Applying a saved plan doesn't ask for confirmation. Single mode took **3 minutes 25 seconds** in testing (`Apply complete! Resources: 58 added, 0 changed, 0 destroyed.`); HA took **16 minutes** (`78 added`), 15.5 of them for RDS Multi-AZ. Terraform returns once the AWS resources exist; the instances keep bootstrapping for a few more minutes (section 7). From this point the stack is billed until you tear it down (section 15).
 
 What gets created:
 
@@ -561,6 +570,8 @@ Nothing in this section needs to be typed except the checks: it explains what ru
    - writes `/opt/liferay-ec2/docker/.env` for Compose.
 4. It builds the Elasticsearch image with the analysis plugins (where needed), starts PostgreSQL and Elasticsearch, then Liferay: `docker compose up -d liferay` (Docker runtime; the rendered files are mounted at `/mnt/liferay/files`, which the image copies into `/opt/liferay` at startup), or installs the Tomcat bundle and starts the `liferay` service (Tomcat runtime; `ExecStartPre` copies the same files into `/opt/liferay`).
 5. It waits until `http://127.0.0.1:8080/c/portal/robots` returns 200 (the ALB health check), then writes `/opt/liferay-ec2/runtime/bootstrap.done`.
+
+In HA the order matters: the search node first, then node 1, then the other nodes. Section 9.6 explains how the bootstrap enforces it.
 
 What it looked like in testing (single mode, Docker runtime; times in UTC from `/var/log/liferay-ec2-bootstrap.log`):
 
@@ -792,13 +803,17 @@ Seen in testing; none of them stops the PoC:
 
 > Applies to `deployment_mode = "ha"`.
 
+> ✅ **Tested on 22 and 23 October 2026** in Asia Pacific (Tokyo), Docker runtime, two nodes, with a DXP Non-Production (Virtual Cluster) key: clustering, shared Documents and Media, failover in both directions, cache replication between nodes, and a rolling CI deploy. Four start-up problems were found and fixed on the way (9.6). The Tomcat runtime in HA is not yet tested.
+
 ### 9.1 Database: RDS for PostgreSQL Multi-AZ
 
 All nodes share one RDS instance (`db_endpoint`). RDS keeps a synchronous standby in the other Availability Zone and fails over automatically; Liferay reconnects through the same DNS name. Backups are kept 7 days. `rds.force_ssl` is `0` so the default JDBC URL works; for production, add `?sslmode=require` to the URL in `render-config.sh` and set `rds.force_ssl = 1`.
 
+Creating it took 15 minutes 38 seconds in testing, most of the 16-minute apply. RDS's API reports `MultiAZ: True` but `SecondaryAvailabilityZone: None` for this instance class and engine; that is expected and doesn't mean the standby is missing.
+
 ### 9.2 Documents and Media: EFS
 
-Every Liferay node mounts the same EFS file system at `/mnt/efs` (TLS in transit) and uses `/mnt/efs/document_library` as Liferay's default file system store. An upload on one node is visible on every other node immediately. EFS automatic backups are on.
+Every Liferay node mounts the same EFS file system at `/mnt/efs` (TLS in transit, through the EFS mount helper's `efs-proxy`) and uses `/mnt/efs/document_library` as Liferay's default file system store. An upload on one node is visible on every other node immediately, and stays readable while any node is down (tested). EFS automatic backups are on.
 
 > 🔎 **Alternative:** Liferay's S3 store (`com.liferay.portal.store.s3.S3Store`) puts Documents and Media in S3 instead of EFS. It scales further and costs less at volume, but needs its own OSGi configuration and a data migration if you switch later. This guide uses EFS because it behaves the same for the Docker and Tomcat runtimes.
 
@@ -819,14 +834,28 @@ Liferay nodes must exchange cache invalidations and coordinate scheduled jobs. L
   cluster.link.channel.properties.transport.0=/opt/liferay/jgroups/transport.xml
   ```
 
-- [`jgroups-tcp-jdbc-ping.xml`](host/config/jgroups-tcp-jdbc-ping.xml) is Liferay's own JGroups stack with `UDP` replaced by `TCP` (bound to the node's private IP, port 7800 for control and 7801 for transport) and `PING` replaced by **`JDBC_PING`**, which keeps the member list in a `JGROUPSPING` table in the shared PostgreSQL database. No extra infrastructure, and it works the same in Docker (host network) and Tomcat.
+- [`jgroups-tcp-jdbc-ping.xml`](host/config/jgroups-tcp-jdbc-ping.xml) is Liferay's own JGroups stack with `UDP` replaced by `TCP` (bound to the node's private IP, port 7800 for control and 7801 for transport) and `PING` replaced by **`JDBC_PING`**, which keeps the member list in a `JGROUPSPING` table in the shared PostgreSQL database. No extra infrastructure, and it works the same in Docker (host network) and Tomcat. Tested with DXP 2026.Q1.13: both channels form a view of all nodes, and nodes leave and rejoin cleanly.
 - The Liferay security group allows 7800-7801 between Liferay nodes only.
 
-> 🔎 **Verify** the JGroups version bundled in your DXP release: the stack is copied from Liferay's `udp_control.xml` for JGroups 5.x. If a protocol name is rejected at startup, take `udp_control.xml` from the `com.liferay.portal.cluster.multiple` module of your release and apply the same two substitutions.
+### 9.5 Load balancer, sessions and restarts
 
-### 9.5 Load balancer and sessions
+The ALB spreads users across nodes with **sticky sessions** (`lb_cookie`, 1 day): Liferay does not replicate HTTP sessions, so a user stays on one node. If that node stops, the user moves to another node and must sign in again.
 
-The ALB spreads users across nodes with **sticky sessions** (`lb_cookie`, 1 day): Liferay does not replicate HTTP sessions, so a user stays on one node. If that node stops, the user moves to another node and must sign in again. Deployments (section 12) restart one node at a time and wait for it to be healthy before moving to the next.
+- **Unplanned failure (a node crashes):** the ALB keeps sending that node's users to it until its health check fails. The target group checks `/c/portal/robots` every **10 seconds** and takes a node out after **2** failures, so users see HTTP 502 for about 20 seconds. In testing with the earlier setting (every 30 seconds, 5 failures), users on the stopped node got 502 for **2 minutes 19 seconds to 2.5 minutes**; the faster setting is 🔎 not yet re-measured.
+- **Planned restarts (deploys):** `deploy-docker.sh` (and `deploy-tomcat.sh` when it restarts) first **takes the node out of the ALB** and waits up to 30 seconds for its requests to finish, restarts it, waits until Liferay answers, then **puts it back** and waits until the ALB reports it `healthy`. Section 12 rolls nodes one at a time, so the other nodes serve everyone meanwhile. For this, the instance role may read target health and register or deregister targets in this stack's target group only.
+
+### 9.6 First start, in order
+
+Four things must happen in order when an HA stack starts for the first time. All four went wrong in testing before the guide handled them:
+
+| Order | Why | What the bootstrap does |
+| --- | --- | --- |
+| Search node before Liferay | Liferay creates its search indexes at startup. A node that starts before Elasticsearch answers runs without its company index (`index_not_found_exception ... liferay-<company-id>`) until it is restarted | Every Liferay node waits for `ES_URL/_cluster/health` (up to 20 minutes): `Waiting for Elasticsearch at http://<search-ip>:9200` |
+| Node 1 before the others | Against an empty database, two nodes create Liferay's tables at once and one fails: `duplicate key value violates unique constraint "release__pkey"`, then `BeanLocator is null` | Each node gets `NODE_INDEX`. Nodes 2 and up find node 1 through the EC2 API and wait until it answers on port 8080: `Waiting for liferay-poc-liferay-1 to finish starting (this is node 2)`, then `liferay-poc-liferay-1 (10.20.x.x) is up`. Later restarts don't wait, because node 1 is already up |
+| Compose on the search node | Compose checks every service in `compose.yaml`, also the Liferay one the search node doesn't run. A required Documents and Media folder stopped Elasticsearch from starting: `required variable LIFERAY_DOCLIB_DIR is missing a value` | The folder has a default, so the search node starts only Elasticsearch |
+| Only your license | The `liferay/dxp` image ships a single-node trial key. In a cluster it logs `ERROR ... DXP Development license validation failed` with `Clustering has been detected. Developer licenses do not allow for clustering.` on every first start | Compose sets `LIFERAY_CONTAINER_DISABLE_TRIAL_LICENSE=true`, so the image deletes its trial key. The older name `LIFERAY_DISABLE_TRIAL_LICENSE` is ignored by 2026.Q1 images |
+
+Expected bootstrap timeline (tested): the search node finishes about 2 minutes after the apply starts; RDS is ready after about 16 minutes; node 1 then needs about 2 minutes to pull the image and 2 more to create the database; node 2 starts as soon as node 1 answers and is ready about a minute later.
 
 ### Verify
 
@@ -836,50 +865,78 @@ The ALB spreads users across nodes with **sticky sessions** (`lb_cookie`, 1 day)
    scripts/run-on-stack.sh "${STACK}" all 'sudo /opt/liferay-ec2/scripts/verify-node.sh'
    ```
 
-   ✅ Expected: `All checks passed` on every Liferay node (including `EFS mounted` and `Cluster members = 2`) and on the search node (`Elasticsearch cluster health ... green`, the four plugins).
+   ✅ Expected: `All checks passed` on every Liferay node, including these lines, and on the search node (`Elasticsearch cluster health ... green`, the four plugins):
 
-2. The nodes see each other in the cluster (`verify-node.sh` already checks this as `Cluster members = N`):
+   ```text
+   PASS  Database reachable                 liferay-poc.<id>.ap-northeast-1.rds.amazonaws.com:5432 reachable
+   PASS  Elasticsearch reachable            status green, 1 node(s)
+   PASS  License registered                 ... DXP Non-Production license validation passed
+   PASS  No license errors                  none found
+   PASS  Documents and Media writable       127.0.0.1:/ 1% used
+   PASS  EFS mounted                        /mnt/efs is a mountpoint
+   PASS  Cluster members = 2                view [ip-10-20-133-124-18359|9] (2)
+   ```
+
+2. The nodes see each other in the cluster:
 
    ```bash
    scripts/run-on-stack.sh "${STACK}" liferay \
-     "/opt/liferay-ec2/scripts/liferay-log.sh | grep -oE 'view \[[^]]*\] \([0-9]+\)' | tail -2"
+     "/opt/liferay-ec2/scripts/liferay-log.sh | grep -oE 'view (MergeView::)?\[[^]]*\] \([0-9]+\)( \[[^]]*\])?' | tail -2"
    ```
 
-   ✅ Expected: the latest view on each node has **as many members as `liferay_node_count`**, for example `view [ip-10-20-128-10-12345|1] (2)`. A view of `(1)` on each node means they did not find each other (section 16). 🔎 Verify the exact log wording on your release.
+   ✅ Expected on every node: the latest view of each channel lists **as many members as `liferay_node_count`**, one per node, for example `view [ip-10-20-133-124-56237|1] (2) [ip-10-20-133-124-56237, ip-10-20-151-158-46150]`. A view of `(1)` on each node means they did not find each other (section 16). The number after `|` grows each time a node leaves or joins.
 
-3. The discovery table is populated:
+   A restarted node sometimes starts one channel alone (`(1)`) before it finds the others; JGroups merges the halves within about a minute and logs `MergeView::[...] (2) [...], 2 subgroups: ...`. In testing, node 2's control channel merged 48 seconds after it started. Only a `(1)` that stays for several minutes is a problem.
+
+3. The discovery table in RDS has an entry per node and channel:
 
    ```bash
-   aws ssm start-session --target "$(terraform -chdir=terraform output -json liferay_instance_ids | jq -r '.[0]')"
-   sudo docker run --rm --network host postgres:16 \
-     psql "postgresql://liferay:$(sudo bash -c 'source /opt/liferay-ec2/scripts/common.sh && get_secret db/password')@$(grep DB_HOST /etc/liferay-ec2/host.env | cut -d= -f2)/lportal" \
-     -c 'select cluster_name, own_addr from jgroupsping;'
+   scripts/run-on-stack.sh "${STACK}" liferay 'source /opt/liferay-ec2/scripts/common.sh && PGPASSWORD=$(get_secret db/password) docker run --rm -q --network host -e PGPASSWORD postgres:16 psql -h "${DB_HOST}" -U "${DB_USER}" -d "${DB_NAME}" -At -c "select cluster_name, own_addr from jgroupsping order by 1;"'
    ```
 
-   ✅ Expected: one row per node for each of the two channels.
+   ✅ Expected: two `liferay-channel-control` rows and two `liferay-channel-transport-0` rows (one per node each), with UUIDs as addresses.
 
 4. Both nodes are healthy behind the ALB:
 
    ```bash
-   aws elbv2 describe-target-health \
-     --target-group-arn "$(aws elbv2 describe-target-groups --names "${STACK}-liferay" --query 'TargetGroups[0].TargetGroupArn' --output text)" \
+   TG=$(aws elbv2 describe-target-groups --names "${STACK}-liferay" --query 'TargetGroups[0].TargetGroupArn' --output text)
+   aws elbv2 describe-target-health --target-group-arn "${TG}" \
      --query 'TargetHealthDescriptions[].[Target.Id, TargetHealth.State]' --output text
    ```
 
    ✅ Expected: every node `healthy`.
 
-5. **Failover test.** Stop Liferay on the node you are using and reload the page:
+5. **Failover test.** Sign in, upload a file to **Documents and Media**, then stop Liferay on one node, reload, and repeat for the other node. To stop and start a node:
 
    ```bash
-   scripts/run-on-stack.sh "${STACK}" liferay 'hostname'   # note the node names
-   # in a browser, the page footer shows the serving node (web.server.display.node, from the sample workspace)
-   aws ssm send-command --document-name AWS-RunShellScript --instance-ids <instance-id> \
-     --parameters 'commands=["docker stop liferay || systemctl stop liferay"]'
+   NODE=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=${STACK}-liferay-1" "Name=instance-state-name,Values=running" \
+     --query 'Reservations[0].Instances[0].InstanceId' --output text)
+   aws ssm send-command --document-name AWS-RunShellScript --instance-ids "${NODE}" --parameters 'commands=["docker stop liferay"]'
+   # later
+   aws ssm send-command --document-name AWS-RunShellScript --instance-ids "${NODE}" --parameters 'commands=["docker start liferay"]'
    ```
 
-   ✅ Expected: within about a minute the site loads from the other node (you may need to sign in again). Content and uploaded documents are the same. Start the node again with `docker start liferay` or `systemctl start liferay` and check it returns to `healthy`.
+   (Tomcat runtime: `systemctl stop liferay` / `systemctl start liferay`.)
 
-6. **Cache replication test.** Edit a web content article on one node, then load it through the other (clear the `AWSALB` cookie, or open a private window, to change node). ✅ The change is visible without waiting.
+   ✅ Expected: if you were on the stopped node, you get HTTP 502 until the ALB marks it `unhealthy` (9.5), then the site loads from the other node and you are signed out (sessions aren't shared). If you were on the other node, nothing changes and you stay signed in. Either way, content and your uploaded file are the same. The surviving node's log shows a view of `(1)`; after `docker start`, the node is ready in about 40 seconds and the views are back to `(2)`.
+
+6. **Cache replication test.** Prove that an edit on one node clears the other node's cache. Steer the ALB to one node at a time by taking the other out (each switch takes about 30 seconds):
+
+   ```bash
+   ID1=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=${STACK}-liferay-1" "Name=instance-state-name,Values=running" --query 'Reservations[0].Instances[0].InstanceId' --output text)
+   ID2=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=${STACK}-liferay-2" "Name=instance-state-name,Values=running" --query 'Reservations[0].Instances[0].InstanceId' --output text)
+
+   # only node 2
+   aws elbv2 register-targets   --target-group-arn "${TG}" --targets "Id=${ID2},Port=8080"
+   aws elbv2 deregister-targets --target-group-arn "${TG}" --targets "Id=${ID1},Port=8080"
+   ```
+
+   1. **Only node 2:** open the home page; node 2 now has it cached.
+   2. **Only node 1** (swap `ID1` and `ID2` in the two commands): sign in (you are signed out, sessions aren't shared), edit the home page (for example the **Welcome** heading) and **Publish**.
+   3. **Only node 2** again: reload the home page.
+   4. Put both back: `aws elbv2 register-targets --target-group-arn "${TG}" --targets "Id=${ID1},Port=8080" "Id=${ID2},Port=8080"`.
+
+   ✅ Expected: in step 3, node 2 shows your edit immediately, without a restart. Check `aws elbv2 describe-target-health` between steps: the node you took out shows `draining`, then `unused`. In testing, node 2 showed the edited heading straight after it was published on node 1.
 
 ---
 
@@ -1064,6 +1121,25 @@ Tested on 22 October 2026: a push to `main` built and pushed `main-1041124` with
 
 Tested timings (single mode): `build` 1 minute, `image` 4 minutes (about 3.1 GB, 2.0 GB compressed in ECR), `deploy` 2 minutes, of which Liferay's restart is about 1 minute.
 
+**In high availability** (tested on 22 October 2026, two nodes, [run 39799656603](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace/actions/runs/39799656603)): the deploy took 5 minutes, one node at a time, each taken out of the load balancer first (section 9.5):
+
+```text
+[liferay-ec2 15:03:13] Taking this node out of the load balancer (in-flight requests finish first)
+[liferay-ec2 15:03:46] Load balancer state of this node: unused
+...
+Liferay is ready
+[liferay-ec2 15:04:53] Putting this node back into the load balancer
+[liferay-ec2 15:04:59] Load balancer state of this node: healthy
+[liferay-ec2 15:04:59] Deployed ...dxp-custom:main-a0f664c
+```
+
+A probe requesting `/c/portal/robots` through the ALB every 2 seconds during the whole rollout got **544 × HTTP 200, no 502s, and 3 timeouts** (no answer within 5 seconds) in one **15-second window** right after node 1 was restarted, while node 2 served alone. The likely cause is node 2 taking over the cluster coordinator's role from node 1; it was not confirmed, because node 2's container log was replaced by its own deploy a minute later. Accepted for this PoC; for production, keep Liferay's logs outside the container (for example CloudWatch Logs) so such windows can be diagnosed, and expect a few slow seconds per rollout. To measure it yourself, run this during a deploy:
+
+```bash
+URL=$(terraform -chdir=terraform output -raw liferay_url)
+while :; do echo "$(date -u +%T) $(curl -s -o /dev/null --max-time 5 -w '%{http_code}' "${URL}/c/portal/robots")"; sleep 2; done | grep -v ' 200$'
+```
+
 ### 12.4 Roll back
 
 - **Docker runtime:** a node that does not become ready rolls itself back to the previous image, and the rollout stops, so other nodes keep the old image. To return to an older build on purpose, **Run workflow** on its `v*` tag, re-run the old workflow run's `deploy` job, or run on the stack: `scripts/run-on-stack.sh <stack> liferay '/opt/liferay-ec2/scripts/deploy-docker.sh <ecr-repo>:<old-tag>'` (HA: one node at a time).
@@ -1221,8 +1297,14 @@ Expected `0` for each in an account used only for this guide (otherwise, none of
 | `Elasticsearch analysis plugins` FAIL | Image built without plugins | `docker rmi liferay-elasticsearch:<version>` and re-run the bootstrap |
 | `EFS mounted` FAIL / `mount.nfs4: Connection timed out` | Mount target not ready or EFS security group | Wait for both mount targets to be `available`; check port 2049 from the Liferay SG |
 | `Permission denied` writing Documents and Media | Ownership | `chown 1000:1000 /mnt/efs/document_library` (or the single-mode folder) |
+| HA: node 2 never becomes ready; its log shows `duplicate key value violates unique constraint "release__pkey"` and `BeanLocator is null` | Two nodes started against the empty database at once (fixed in the bootstrap, section 9.6). Nodes created before that fix lack `NODE_INDEX` | On the failed node: add `NODE_INDEX=<n>` and `FIRST_NODE_NAME=<stack>-liferay-1` to `/etc/liferay-ec2/host.env`, re-sync the host files, `docker rm -f liferay`, then run `bootstrap.sh` again |
+| A Liferay node logs `index_not_found_exception ... no such index [liferay-<company-id>]` | It started before Elasticsearch was reachable | Restart Liferay on that node (it creates the index at startup), then **Reindex all search indexes** (section 11). New stacks wait for Elasticsearch (section 9.6) |
+| Search node: Elasticsearch never starts; log shows `required variable LIFERAY_DOCLIB_DIR is missing a value` | `compose.yaml` from before October 2026 required a Liferay-only variable | Use the current `host/docker/compose.yaml`, re-sync the host files and run `bootstrap.sh` again |
+| `ERROR ... DXP Development license validation failed` / `Developer licenses do not allow for clustering` | The image's built-in trial key is active in a cluster | Set `LIFERAY_CONTAINER_DISABLE_TRIAL_LICENSE: "true"` (not `LIFERAY_DISABLE_TRIAL_LICENSE`) as in `compose.yaml`, then recreate the container: `docker compose up -d --force-recreate liferay` |
+| Right after a `terraform apply` that changed the instance role, instances get `AccessDenied` for the new actions | IAM changes take a few seconds to reach every AWS service | Wait about 30 seconds and retry |
+| Users get HTTP 502 for about 2.5 minutes after a node stops | A target group created before October 2026 checks every 30 seconds and needs 5 failures | `terraform -chdir=terraform apply` (it updates the health check in place to 10 seconds and 2 failures) |
 | HA: each node's JGroups view shows `(1)` | Nodes can't reach each other on 7800-7801, or JDBC_PING table not written | Check the `liferay_cluster` SG rule; `select * from jgroupsping`; check the bind address in `/opt/liferay/jgroups/control.xml` is the node's private IP |
-| HA: `JDBC_PING` or `JGROUPSPING` errors at startup | Protocol attribute differs in your JGroups version | Section 9.4 🔎; take `udp_control.xml` from your release |
+| HA: `JDBC_PING` or `JGROUPSPING` errors at startup | Protocol attribute differs in your JGroups version (the stack is tested with DXP 2026.Q1.13) | Take `udp_control.xml` from the `com.liferay.portal.cluster.multiple` module of your release and apply the same two substitutions (section 9.4) |
 | Users signed out repeatedly | Stickiness off, or a node restarting | Check the target group's stickiness; check node health |
 | Pages load without CSS, or links use `http://` behind HTTPS | Forwarded headers or protocol not set | Section 10 step 4; check `web.server.protocol=https` in the rendered `portal-ext.properties` |
 | Redirect loop | HTTPS redirect configured in two places | Redirect only at the ALB |
@@ -1243,8 +1325,8 @@ Expected `0` for each in an account used only for this guide (otherwise, none of
 Confirm these before relying on the guide for anything beyond a sandbox:
 
 1. ✅ **Health check path** `/c/portal/robots` returns 200 on DXP 2026.Q1 once Liferay is ready, **provided the request's host name is in `virtual.hosts.valid.hosts`** (section 8.1). Confirmed on 22 October 2026; the guide originally missed the valid-hosts list, which made the ALB health check fail with 500.
-2. ✅ **Docker mount path**: the `liferay/dxp` 2026.Q1 image copies `<mount>/files` into `/opt/liferay` at startup, where `<mount>` is `/etc/liferay/mount` if it exists, otherwise `/mnt/liferay`. This guide mounts at `/mnt/liferay/files` so module jars the workspace bakes into `/mnt/liferay/deploy` are deployed too (section 7). Confirmed for `portal-ext.properties`, `deploy/license.xml`, `osgi/configs` and module jars; `jgroups/` (HA) not yet tested.
-3. **JGroups stack** (section 9.4): protocol names and `JDBC_PING` attributes match the JGroups version in your release; `cluster.link.autodetect.address` behaves as expected with host networking.
+2. ✅ **Docker mount path**: the `liferay/dxp` 2026.Q1 image copies `<mount>/files` into `/opt/liferay` at startup, where `<mount>` is `/etc/liferay/mount` if it exists, otherwise `/mnt/liferay`. This guide mounts at `/mnt/liferay/files` so module jars the workspace bakes into `/mnt/liferay/deploy` are deployed too (section 7). Confirmed for `portal-ext.properties`, `deploy/license.xml`, `osgi/configs`, module jars and `jgroups/` (HA).
+3. ✅ **JGroups stack** (section 9.4): TCP with `JDBC_PING` (and an explicit `initialize_sql` for PostgreSQL) works with the JGroups version in DXP 2026.Q1.13, and `cluster.link.autodetect.address` behaves with host networking. Confirmed on 22 October 2026; re-check on other releases.
 4. **Forwarded-header properties** `web.server.forwarded.host.enabled` and `web.server.forwarded.protocol.enabled` behind the ALB (section 10).
 5. 🟡 **Elasticsearch 8.19.20** works with DXP 2026.Q1.13 using the `elasticsearch8` OSGi configuration (tested: green indexes, search results). Still check it is in the compatibility matrix for your release.
 6. 🟡 **PostgreSQL 16** works as the container (tested); RDS not yet tested. Still check the compatibility matrix.

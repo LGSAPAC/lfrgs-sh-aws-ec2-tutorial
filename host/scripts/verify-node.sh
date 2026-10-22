@@ -113,18 +113,19 @@ modules_deployed() {
 }
 
 no_license_errors() {
-	if liferay_log | grep -iE 'license.*(invalid|expired|not found)' | tail -1 | grep .; then
+	if liferay_log | grep -iE 'license.*(invalid|expired|not found|validation failed)|licenses do not allow' | tail -1 | grep .; then
 		return 1
 	fi
 
 	echo "none found"
 }
 
-# The latest JGroups view, for example "Accepted view [ip-10-20-128-10-12345|1] (2) [...]".
+# The latest JGroups view, for example "Accepted view [ip-10-20-128-10-12345|1] (2) [...]", or
+# "Accepted view MergeView::[...|17] (2) [...]" after two halves of the cluster merged.
 cluster_members() {
 	local view
 
-	view=$(liferay_log | grep -oE 'view \[[^]]*\] \([0-9]+\)' | tail -1)
+	view=$(liferay_log | grep -oE 'view (MergeView::)?\[[^]]*\] \([0-9]+\)' | tail -1)
 	[ -n "${view}" ] || { echo "no JGroups view in the log yet"; return 1; }
 	echo "${view}"
 	[[ "${view}" == *"(${CLUSTER_SIZE})" ]]

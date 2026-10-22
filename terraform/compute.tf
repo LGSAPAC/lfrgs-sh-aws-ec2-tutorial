@@ -30,10 +30,13 @@ resource "aws_instance" "liferay" {
     host_env = merge(local.host_env_common, {
       ROLE         = "liferay"
       CLUSTER_SIZE = tostring(local.node_count)
-      DB_HOST      = local.ha ? aws_db_instance.main[0].address : "127.0.0.1"
-      ES_URL       = local.ha ? "http://${aws_instance.search[0].private_ip}:9200" : "http://127.0.0.1:9200"
-      EFS_ID       = local.ha ? aws_efs_file_system.doclib[0].id : ""
-      DOCLIB_DIR   = local.ha ? "/mnt/efs/document_library" : "/var/lib/liferay-ec2/document_library"
+      # Node 1 starts first and creates the database; the others wait for it (bootstrap.sh).
+      NODE_INDEX      = tostring(count.index + 1)
+      FIRST_NODE_NAME = "${var.name}-liferay-1"
+      DB_HOST         = local.ha ? aws_db_instance.main[0].address : "127.0.0.1"
+      ES_URL          = local.ha ? "http://${aws_instance.search[0].private_ip}:9200" : "http://127.0.0.1:9200"
+      EFS_ID          = local.ha ? aws_efs_file_system.doclib[0].id : ""
+      DOCLIB_DIR      = local.ha ? "/mnt/efs/document_library" : "/var/lib/liferay-ec2/document_library"
     })
   })
 

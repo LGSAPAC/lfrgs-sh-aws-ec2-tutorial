@@ -45,7 +45,7 @@ systemctl enable --now docker
 
 if [ "${MODE}" = "single" ] || [ "${ROLE}" = "search" ]; then
 	echo 'vm.max_map_count=262144' > /etc/sysctl.d/99-elasticsearch.conf
-	sysctl -q --system
+	sysctl -q -p /etc/sysctl.d/99-elasticsearch.conf
 fi
 
 #
@@ -104,6 +104,39 @@ if [ "${#DEPENDENCIES[@]}" -gt 0 ]; then
 fi
 
 if is_liferay_node; then
+	# Liferay creates its search indexes at startup, so Elasticsearch must be up first.
+	log "Waiting for Elasticsearch at ${ES_URL}"
+	for _ in $(seq 1 80); do
+		curl -fs --max-time 5 "${ES_URL}/_cluster/health" > /dev/null && break
+		sleep 15
+	done
+	curl -fs --max-time 5 "${ES_URL}/_cluster/health" > /dev/null || fail "Elasticsearch at ${ES_URL} is not reachable"
+
+	# In high availability only node 1 may start against an empty database: two nodes creating
+	# the schema at once fails with 'duplicate key value violates unique constraint "release__pkey"'.
+	# Nodes 2 and up wait until node 1 answers. Later restarts don't wait: node 1 is already up.
+	if [ "${MODE}" = "ha" ] && [ "${NODE_INDEX:-1}" -gt 1 ]; then
+		FIRST_NODE_IP=""
+
+		log "Waiting for ${FIRST_NODE_NAME} to finish starting (this is node ${NODE_INDEX})"
+
+		for _ in $(seq 1 180); do
+			if [ -z "${FIRST_NODE_IP}" ] || [ "${FIRST_NODE_IP}" = "None" ]; then
+				FIRST_NODE_IP=$(aws ec2 describe-instances \
+					--filters "Name=tag:Name,Values=${FIRST_NODE_NAME}" "Name=instance-state-name,Values=running" \
+					--query 'Reservations[0].Instances[0].PrivateIpAddress' --output text 2> /dev/null || true)
+			fi
+
+			if [ -n "${FIRST_NODE_IP}" ] && [ "${FIRST_NODE_IP}" != "None" ] && \
+				[ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Host: ${FIRST_NODE_IP}" "http://${FIRST_NODE_IP}:8080/c/portal/robots")" = "200" ]; then
+				log "${FIRST_NODE_NAME} (${FIRST_NODE_IP}) is up"
+				break
+			fi
+
+			sleep 15
+		done
+	fi
+
 	if [ "${RUNTIME}" = "docker" ]; then
 		IMAGE=$(current_liferay_image)
 

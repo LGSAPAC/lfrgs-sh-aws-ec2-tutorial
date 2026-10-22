@@ -22,6 +22,11 @@ services:
     stop_grace_period: 2m
     environment:
       LIFERAY_JVM_OPTS: ${LIFERAY_JVM_OPTS:--Xms6g -Xmx6g}
+      # The image ships a single-node trial key. Your key comes from S3 (deploy/license.xml);
+      # in a cluster the trial key fails with "Developer licenses do not allow for clustering".
+      # 2026.Q1 images read LIFERAY_CONTAINER_DISABLE_TRIAL_LICENSE (the older
+      # LIFERAY_DISABLE_TRIAL_LICENSE is ignored) and then delete the trial key files.
+      LIFERAY_CONTAINER_DISABLE_TRIAL_LICENSE: "true"
     ulimits:
       nofile: { soft: 65536, hard: 65536 }
     volumes:
@@ -33,7 +38,9 @@ services:
       - /opt/liferay-ec2/runtime/files:/mnt/liferay/files:ro
       - liferay-data:/opt/liferay/data
       # Documents and Media: a local folder on one instance, EFS in high availability.
-      - ${LIFERAY_DOCLIB_DIR:?set LIFERAY_DOCLIB_DIR in .env}:/opt/liferay/data/document_library
+      # A default, not ":?": Compose checks every service, also on the search node, which has
+      # no Documents and Media folder and doesn't run this service.
+      - ${LIFERAY_DOCLIB_DIR:-/var/lib/liferay-ec2/document_library}:/opt/liferay/data/document_library
     logging:
       driver: json-file
       options: { max-size: 100m, max-file: "5" }
