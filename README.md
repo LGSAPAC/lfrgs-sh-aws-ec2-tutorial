@@ -3,7 +3,7 @@
 **Product:** Liferay DXP 2026.Q1 LTS (`2026.q1.13-lts`), self-hosted on Amazon EC2, deployed with Docker (or the traditional Tomcat bundle)
 **Audience:** Partner and customer technical teams setting up a sandbox or proof-of-concept (PoC) environment
 **Prepared by:** Liferay Customer Success APAC
-**Status:** Draft, October 2026. Sections 2 to 8 and 11 (prerequisites, tools, AWS access, Terraform plan and apply, instance bootstrap, first start and sign-in, validation) tested on 22 October 2026 in Asia Pacific (Tokyo), single mode with the Docker runtime; sections 9, 10 and 12 onwards not yet run on AWS. The Terraform passes `terraform validate`, every shell script passes ShellCheck, and the sample workspace's build and `linux/amd64` image jobs passed in GitHub Actions on 22 October 2026 ([run 39708712711](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace/actions/runs/39708712711)). Items to confirm are marked **🔎 Verify**.
+**Status:** Draft, October 2026. Sections 2 to 8, 11 and 12 (prerequisites, tools, AWS access, Terraform plan and apply, instance bootstrap, first start and sign-in, validation, CI/CD deploy) tested on 22 October 2026 in Asia Pacific (Tokyo), single mode with the Docker runtime; sections 9, 10 and 13 onwards not yet run on AWS. The Terraform passes `terraform validate`, every shell script passes ShellCheck, and the sample workspace's build and `linux/amd64` image jobs passed in GitHub Actions on 22 October 2026 ([run 39708712711](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace/actions/runs/39708712711)). Items to confirm are marked **🔎 Verify**.
 
 > ⚠️ **Read this first: this is a draft, only partly tested.**
 > Sections that have been run on a real AWS account are marked **✅ Tested** or **🟡 Partly tested**; the others have not been run yet. This guide builds Liferay on plain EC2 instances: no Kubernetes, no EKS, no Helm. It combines Liferay's documented self-hosted installation (Docker image and Tomcat bundle, Cluster Link, remote Elasticsearch) with common AWS practice (Terraform, Application Load Balancer, RDS, EFS, Systems Manager, GitHub OIDC). AWS console labels and instance types change; follow AWS documentation where it differs from this guide.
@@ -412,6 +412,7 @@ Edit `terraform/terraform.tfvars`. The important settings:
 | `allowed_cidrs` | `["203.0.113.10/32"]` | Who can open Liferay. Find your IP with `curl -s https://checkip.amazonaws.com` and add `/32`. If your IP changes (another network, VPN), update it and `terraform -chdir=terraform apply` |
 | `license_file` | `../license/license.xml` | Uploaded to S3 by Terraform |
 | `github_repository` | `LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace` | Repository allowed to deploy (section 12). Empty skips the CI/CD role |
+| `github_oidc_subject_prefix` | empty | Set it if the repository uses GitHub's **immutable OIDC subject** (section 12.2). Empty means `repo:<owner>/<name>` |
 | `create_github_oidc_provider` | `true` | `false` if the account already has one (section 4.4) |
 | `acm_certificate_arn`, `virtual_host` | empty | HTTPS and your own domain, section 10 |
 | `liferay_node_count`, `liferay_heap`, `elasticsearch_heap`, `db_instance_class` | `2`, `6g`, `2g`, `db.m6g.large` | HA sizing. With HA, raise `liferay_heap` to `8g` (Liferay has the instance to itself) |
@@ -558,7 +559,7 @@ Nothing in this section needs to be typed except the checks: it explains what ru
    - writes the Elasticsearch 8 OSGi config (`networkHostAddresses`, `productionModeEnabled`);
    - writes the JGroups files (HA) and copies the license from S3 into `files/deploy/license.xml`;
    - writes `/opt/liferay-ec2/docker/.env` for Compose.
-4. It builds the Elasticsearch image with the analysis plugins (where needed), starts PostgreSQL and Elasticsearch, then Liferay: `docker compose up -d liferay` (Docker runtime; the image copies `/etc/liferay/mount/files` into `/opt/liferay` at startup), or installs the Tomcat bundle and starts the `liferay` service (Tomcat runtime; `ExecStartPre` copies the same files into `/opt/liferay`).
+4. It builds the Elasticsearch image with the analysis plugins (where needed), starts PostgreSQL and Elasticsearch, then Liferay: `docker compose up -d liferay` (Docker runtime; the rendered files are mounted at `/mnt/liferay/files`, which the image copies into `/opt/liferay` at startup), or installs the Tomcat bundle and starts the `liferay` service (Tomcat runtime; `ExecStartPre` copies the same files into `/opt/liferay`).
 5. It waits until `http://127.0.0.1:8080/c/portal/robots` returns 200 (the ALB health check), then writes `/opt/liferay-ec2/runtime/bootstrap.done`.
 
 What it looked like in testing (single mode, Docker runtime; times in UTC from `/var/log/liferay-ec2-bootstrap.log`):
@@ -585,6 +586,8 @@ The rendered files on the instance (single mode; HA adds `files/jgroups/control.
 ```
 
 > 💡 **Why the files belong to `ec2-user`:** they are owned by UID 1000, the user the Liferay container (and the Tomcat runtime's `liferay` user) runs as. On Amazon Linux 2023, UID 1000 is also the default `ec2-user` account, so `ls -l` shows `ec2-user`. `portal-ext.properties` and `.env` contain the database password: SSM sessions run as `ssm-user` and need `sudo` to read them, but anyone who logs in as `ec2-user` can. Don't add SSH keys for `ec2-user`; for production, consider a dedicated UID.
+
+> ⚠️ **Mount at `/mnt/liferay`, not `/etc/liferay/mount`.** The `liferay/dxp` image uses `/etc/liferay/mount` as its mount folder if that folder exists, and `/mnt/liferay` otherwise, never both. The workspace's generated Dockerfile bakes your module jars into `/mnt/liferay/deploy`, so mounting anything under `/etc/liferay/mount` makes the image skip them silently: client extensions still deploy (they live elsewhere), but OSGi modules don't. Found in testing on 22 October 2026; `verify-node.sh` checks for it (`Image modules deployed`).
 
 Every step is safe to run again. After changing the host files (or `host.env`), re-sync and re-run on every instance:
 
@@ -718,6 +721,7 @@ PASS  Elasticsearch analysis plugins     analysis-icu analysis-kuromoji analysis
 PASS  vm.max_map_count >= 262144         262144
 PASS  Liferay container                  running healthy
 PASS  Liferay image                      liferay/dxp:2026.q1.13-lts
+PASS  Image modules deployed             no module jars in the image
 PASS  Database reachable                 127.0.0.1:5432 reachable
 PASS  Elasticsearch reachable            status green, 1 node(s)
 PASS  Liferay HTTP on 8080               HTTP 200 from http://127.0.0.1:8080/c/portal/robots
@@ -731,7 +735,7 @@ PASS  Documents and Media writable       /dev/nvme0n1p1 9% used
 All checks passed
 ```
 
-After a restart, `License registered` shows `DXP Development license validation passed` instead; both mean the key is active.
+After a restart, `License registered` shows `DXP Development license validation passed` instead; both mean the key is active. `Image modules deployed` lists the workspace's jars once you deploy a custom image (section 12).
 
 ✅ The load balancer sees the instance as healthy:
 
@@ -976,7 +980,7 @@ Expected the file you uploaded, with its size in bytes; the same row after the r
 
 ## 12. CI/CD with GitHub Actions
 
-> 🟡 **Partly tested on 22 October 2026:** the `build` and `image` jobs passed ([run 39708712711](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace/actions/runs/39708712711)). Pushing to ECR and the `deploy` job are **not yet tested** against a real stack.
+> ✅ **Tested on 22 October 2026** in Asia Pacific (Tokyo), single mode with the Docker runtime ([run 39725947441](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace/actions/runs/39725947441)): build, push to ECR through OIDC, deploy through SSM, and the portlet and both client extensions deployed. The Tomcat runtime's deploy is not yet tested.
 
 Your code (OSGi modules, client extensions, configuration) lives in a **Liferay Workspace** and reaches the instances through GitHub Actions. A ready-made workspace for this guide is **[LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace)** (DXP `2026.q1.13-lts`, a sample OSGi portlet, a global CSS client extension and a React custom element client extension built with Vite).
 
@@ -1010,9 +1014,31 @@ Terraform prints the exact commands:
 terraform -chdir=terraform output -raw github_variables_commands
 ```
 
-Run them (they set `AWS_REGION`, `AWS_ROLE_ARN`, `ECR_REPOSITORY`, `ARTIFACT_BUCKET`, `LIFERAY_STACK` and `LIFERAY_RUNTIME` as repository **variables**; none of them is a secret).
+Run them (they set `AWS_REGION`, `AWS_ROLE_ARN`, `ECR_REPOSITORY`, `ARTIFACT_BUCKET`, `LIFERAY_STACK` and `LIFERAY_RUNTIME` as repository **variables**; none of them is a secret). Check them:
 
-Then create the GitHub **environment** `ec2` (**Settings → Environments → New environment**). Add **required reviewers** to approve every deployment, and limit it to the `main` branch.
+```bash
+gh variable list --repo <org>/<your-workspace>
+```
+
+Then create the GitHub **environment** `ec2`, limited to the `main` branch and `v*` tags: **Settings → Environments → New environment** → `ec2` → **Deployment branches and tags** → **Selected branches and tags** → add branch `main` and tag `v*`. Or with the GitHub CLI:
+
+```bash
+REPO=<org>/<your-workspace>
+gh api -X PUT "repos/${REPO}/environments/ec2" \
+  -F 'deployment_branch_policy[protected_branches]=false' -F 'deployment_branch_policy[custom_branch_policies]=true'
+gh api -X POST "repos/${REPO}/environments/ec2/deployment-branch-policies" -f name=main -f type=branch
+gh api -X POST "repos/${REPO}/environments/ec2/deployment-branch-policies" -f name='v*' -f type=tag
+```
+
+**Approval before each deployment (required reviewers)** needs **GitHub Team or Enterprise** for a private repository; on **GitHub Free** it is available only for public repositories. On a Free organization GitHub refuses it with `Failed to create the environment protection rule. Please ensure the billing plan supports the required reviewers protection rule.` Check your organization's plan with `gh api orgs/<org> --jq .plan.name`. Without reviewers, every push to `main` deploys straight away (in single mode, Liferay is unavailable for about a minute while the container restarts). On Team or Enterprise, add yourself under **Settings → Environments → ec2 → Required reviewers**.
+
+**Check the OIDC subject your repository sends.** Newer repositories use GitHub's **immutable subject** format, which adds the owner and repository IDs:
+
+```bash
+gh api repos/<org>/<your-workspace>/actions/oidc/customization/sub
+```
+
+If the output shows `"use_immutable_subject":true`, copy its `sub_claim_prefix` (for example `repo:LGSAPAC@85264366/lfrgs-sh-aws-ec2-sample-workspace@1429128939`) into `github_oidc_subject_prefix` in `terraform.tfvars` and run `terraform -chdir=terraform apply` (it changes only the GitHub Actions role's trust policy). Otherwise the `image` job fails with `Could not assume role with OIDC: Not authorized to perform sts:AssumeRoleWithWebIdentity`, because the role trusts `repo:<org>/<your-workspace>:...` and the token says `repo:<org>@<id>/<your-workspace>@<id>:...`.
 
 ### 12.3 Run the pipeline
 
@@ -1022,9 +1048,11 @@ Push to `main`, or start it by hand: **Actions → CI/CD → Run workflow**.
 | --- | --- | --- |
 | `build` | Every push and pull request | `./gradlew build dockerDeploy createDockerfile`, checks the Docker context, packages `liferay-artifacts-<tag>.tar.gz` |
 | `image` | Pushes to `main`, `v*` tags, manual runs | Builds the `linux/amd64` image, checks its contents, pushes to ECR when the AWS variables exist |
-| `deploy` | Pushes to `main`, `v*` tags, manual runs, when `LIFERAY_STACK` is set | Waits for approval (environment `ec2`), then rolls out through SSM, one node at a time, and fails on the first node that does not become ready |
+| `deploy` | Pushes to `main`, `v*` tags, manual runs, when `LIFERAY_STACK` is set | Runs in environment `ec2` (waits for approval if it has required reviewers), then rolls out through SSM, one node at a time, and fails on the first node that does not become ready |
 
 **Image tags:** a `v1.2.0` git tag gives `1.2.0`; anything else gives `<branch>-<short-sha>`, for example `main-1a2b3c4`.
+
+Tested timings (single mode): `build` 1 minute, `image` 4 minutes (about 3.1 GB, 2.0 GB compressed in ECR), `deploy` 2 minutes, of which Liferay's restart is about 1 minute.
 
 ### 12.4 Roll back
 
@@ -1045,10 +1073,19 @@ Push to `main`, or start it by hand: **Actions → CI/CD → Run workflow**.
 
    ```bash
    scripts/run-on-stack.sh "${STACK}" liferay 'docker inspect --format "{{.Config.Image}}" liferay 2>/dev/null || cat /opt/liferay/.liferay-ec2-version'
-   scripts/run-on-stack.sh "${STACK}" liferay '/opt/liferay-ec2/scripts/liferay-log.sh | grep -E "STARTED (com.liferay.ec2.sample.portlet|ec2sampleglobalcss|ec2samplereactapp)" | tail -3'
+   scripts/run-on-stack.sh "${STACK}" liferay 'sudo /opt/liferay-ec2/scripts/verify-node.sh | grep -E "Liferay image|Image modules|checks"'
    ```
 
-   Expected one `STARTED` line each for the portlet and the two client extensions (client extensions start under their project ID: `ec2sampleglobalcss`, `ec2samplereactapp`). 🔎
+   Expected the ECR image with your build tag, `PASS  Image modules deployed  com.liferay.ec2.sample.portlet-1.0.0.jar`, and `All checks passed`.
+
+   ✅ The client extensions started, and the portlet is registered:
+
+   ```bash
+   scripts/run-on-stack.sh "${STACK}" liferay '/opt/liferay-ec2/scripts/liferay-log.sh | grep -E "STARTED (ec2sampleglobalcss|ec2samplereactapp)"'
+   scripts/run-on-stack.sh "${STACK}" liferay "docker exec postgres psql -U liferay -d lportal -At -c \"select portletid, active_ from portlet where lower(portletid) like '%ec2%';\""
+   ```
+
+   Expected `STARTED ec2sampleglobalcss_7.4.13` and `STARTED ec2samplereactapp_7.4.13` (client extensions start under their project ID, with the DXP version), then `com_liferay_ec2_sample_portlet_Ec2SamplePortlet|t` and a `..._LXC_ec2_sample_react_app|t` row. A module jar baked into the image is installed while Liferay boots, before it logs `STARTED` lines, so the portlet has no `STARTED` line; the `portlet` table and `verify-node.sh` show it instead.
 
 4. ✅ The React app's files are served through the load balancer:
 
@@ -1160,7 +1197,10 @@ aws ssm get-parameters-by-path --path "/${STACK}" --query 'length(Parameters)'
 | Pages load without CSS, or links use `http://` behind HTTPS | Forwarded headers or protocol not set | Section 10 step 4; check `web.server.protocol=https` in the rendered `portal-ext.properties` |
 | Redirect loop | HTTPS redirect configured in two places | Redirect only at the ALB |
 | Large uploads fail | ALB idle timeout (300 s here) or Liferay upload limits | Raise `idle_timeout`; check Liferay's upload size settings |
-| GitHub Actions: `Not authorized to perform sts:AssumeRoleWithWebIdentity` | Repository name, branch or environment doesn't match the role's trust policy | `github_repository` in tfvars must be `owner/name` exactly; deploy job must use environment `ec2`; run on `main` or a `v*` tag |
+| GitHub Actions: `Not authorized to perform sts:AssumeRoleWithWebIdentity` | The token's subject doesn't match the role's trust policy: most often GitHub's **immutable subject** format (`repo:<org>@<id>/<name>@<id>:...`), otherwise a wrong repository name, branch or environment | Section 12.2: set `github_oidc_subject_prefix`. Also check `github_repository` is `owner/name` exactly, the deploy job uses environment `ec2`, and the run is on `main` or a `v*` tag |
+| GitHub: `Please ensure the billing plan supports the required reviewers protection rule` | Required reviewers need GitHub Team or Enterprise for private repositories | Create the environment without reviewers (section 12.2), or use an organization on Team or Enterprise |
+| Custom image deployed, client extensions work, but your OSGi modules are missing (no widget, `Image modules deployed` FAIL) | Something is mounted under `/etc/liferay/mount`, so the image ignores `/mnt/liferay/deploy` where the workspace puts module jars | Mount at `/mnt/liferay/files` as in `host/docker/compose.yaml` (section 7), then `docker compose up -d --force-recreate liferay` |
+| The site suddenly times out (`curl` exit 28, browser spins) though the target is `healthy` | Your public IP changed (another network or a VPN) and is no longer in `allowed_cidrs` | Compare `curl -s https://checkip.amazonaws.com` with `allowed_cidrs`, update it and `terraform -chdir=terraform apply`. A VPN's shared exit IP lets others on that VPN reach the site too |
 | GitHub Actions deploy: `No running instances tagged ...` | `LIFERAY_STACK` variable wrong | Set it to `terraform -chdir=terraform output -raw stack_name` |
 | Deploy rolls back: `New image did not become ready` | Your build fails to start | Read the 200 log lines in the job output; fix and push again |
 | `exec format error` | ARM image on x86 instances | Build with `--platform linux/amd64` (the workflow does) |
@@ -1173,7 +1213,7 @@ aws ssm get-parameters-by-path --path "/${STACK}" --query 'length(Parameters)'
 Confirm these before relying on the guide for anything beyond a sandbox:
 
 1. ✅ **Health check path** `/c/portal/robots` returns 200 on DXP 2026.Q1 once Liferay is ready, **provided the request's host name is in `virtual.hosts.valid.hosts`** (section 8.1). Confirmed on 22 October 2026; the guide originally missed the valid-hosts list, which made the ALB health check fail with 500.
-2. 🟡 **Docker mount path**: the `liferay/dxp` 2026.Q1 image copies `/etc/liferay/mount/files` into `/opt/liferay` at startup. Confirmed for `portal-ext.properties`, `deploy/license.xml` and `osgi/configs`; `jgroups/` (HA) not yet tested.
+2. ✅ **Docker mount path**: the `liferay/dxp` 2026.Q1 image copies `<mount>/files` into `/opt/liferay` at startup, where `<mount>` is `/etc/liferay/mount` if it exists, otherwise `/mnt/liferay`. This guide mounts at `/mnt/liferay/files` so module jars the workspace bakes into `/mnt/liferay/deploy` are deployed too (section 7). Confirmed for `portal-ext.properties`, `deploy/license.xml`, `osgi/configs` and module jars; `jgroups/` (HA) not yet tested.
 3. **JGroups stack** (section 9.4): protocol names and `JDBC_PING` attributes match the JGroups version in your release; `cluster.link.autodetect.address` behaves as expected with host networking.
 4. **Forwarded-header properties** `web.server.forwarded.host.enabled` and `web.server.forwarded.protocol.enabled` behind the ALB (section 10).
 5. 🟡 **Elasticsearch 8.19.20** works with DXP 2026.Q1.13 using the `elasticsearch8` OSGi configuration (tested: green indexes, search results). Still check it is in the compatibility matrix for your release.

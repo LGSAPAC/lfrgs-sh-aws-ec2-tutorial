@@ -59,7 +59,8 @@ resource "aws_iam_instance_profile" "instance" {
 #
 
 locals {
-  github_enabled = var.github_repository != ""
+  github_enabled        = var.github_repository != ""
+  github_subject_prefix = var.github_oidc_subject_prefix != "" ? var.github_oidc_subject_prefix : "repo:${var.github_repository}"
   github_oidc_arn = local.github_enabled ? (
     var.create_github_oidc_provider
     ? aws_iam_openid_connect_provider.github[0].arn
@@ -92,9 +93,9 @@ resource "aws_iam_role" "github_actions" {
         # main branch and v* tags (image job), and the "ec2" environment (deploy job)
         StringLike = {
           "token.actions.githubusercontent.com:sub" = [
-            "repo:${var.github_repository}:ref:refs/heads/main",
-            "repo:${var.github_repository}:ref:refs/tags/v*",
-            "repo:${var.github_repository}:environment:ec2",
+            "${local.github_subject_prefix}:ref:refs/heads/main",
+            "${local.github_subject_prefix}:ref:refs/tags/v*",
+            "${local.github_subject_prefix}:environment:ec2",
           ]
         }
       }

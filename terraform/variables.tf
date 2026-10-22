@@ -136,6 +136,17 @@ variable "github_repository" {
   default     = ""
 }
 
+variable "github_oidc_subject_prefix" {
+  description = "OIDC subject prefix GitHub sends for github_repository. Empty means the classic repo:<owner>/<name>. Repositories using GitHub's immutable subject format send repo:<owner>@<owner-id>/<name>@<repo-id>: get it with gh api repos/<owner>/<name>/actions/oidc/customization/sub --jq .sub_claim_prefix."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.github_oidc_subject_prefix == "" || startswith(var.github_oidc_subject_prefix, "repo:")
+    error_message = "Use the sub_claim_prefix GitHub reports, which starts with repo:."
+  }
+}
+
 variable "create_github_oidc_provider" {
   description = "Create the GitHub OIDC identity provider. Set to false if the account already has one for token.actions.githubusercontent.com."
   type        = bool

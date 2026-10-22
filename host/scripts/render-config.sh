@@ -9,7 +9,7 @@
 #   /opt/liferay-ec2/docker/.env                                (Docker Compose settings)
 #   /opt/liferay-ec2/runtime/tomcat.env                         (Tomcat runtime only)
 #
-# The Docker runtime mounts runtime/files at /etc/liferay/mount/files; the Tomcat runtime copies it
+# The Docker runtime mounts runtime/files at /mnt/liferay/files; the Tomcat runtime copies it
 # into /opt/liferay. Safe to run again: it rewrites every file. Restart Liferay to apply changes.
 
 # shellcheck source=common.sh

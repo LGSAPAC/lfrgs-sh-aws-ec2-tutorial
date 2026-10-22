@@ -21,6 +21,11 @@ license_file = "../license/license.xml"
 # The sample workspace repository whose GitHub Actions deploy to this stack.
 github_repository = "LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace"
 
+# If the repository uses GitHub's immutable OIDC subject format, set the prefix it reports:
+#   gh api repos/<owner>/<name>/actions/oidc/customization/sub --jq .sub_claim_prefix
+# for example "repo:LGSAPAC@85264366/lfrgs-sh-aws-ec2-sample-workspace@1429128939". Empty: repo:<owner>/<name>.
+github_oidc_subject_prefix = ""
+
 # Set to false if the account already has the GitHub OIDC provider.
 create_github_oidc_provider = true
 

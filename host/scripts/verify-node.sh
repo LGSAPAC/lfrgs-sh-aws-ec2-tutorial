@@ -78,6 +78,40 @@ log_contains() {
 	[ -n "${match}" ] && echo "${match:0:120}"
 }
 
+# Every module jar baked into a custom image (its /mnt/liferay/deploy) must have been deployed
+# into /opt/liferay/osgi/modules. Read the jars from the image, not the running container:
+# Liferay moves them out of the deploy folder once it has picked them up. Docker runtime only;
+# deploy-tomcat.sh checks the Tomcat runtime's modules itself.
+modules_deployed() {
+	local container work jar name deployed=() missing=()
+
+	container=$(docker create "$(docker inspect --format '{{.Config.Image}}' liferay)") || return 1
+	work=$(mktemp -d)
+	docker cp "${container}:/mnt/liferay/deploy/." "${work}" > /dev/null 2>&1
+	docker rm "${container}" > /dev/null
+
+	for jar in "${work}"/*.jar; do
+		[ -e "${jar}" ] || continue
+		name=$(basename "${jar}")
+
+		if docker exec liferay test -f "/opt/liferay/osgi/modules/${name}"; then
+			deployed+=("${name}")
+		else
+			missing+=("${name}")
+		fi
+	done
+
+	rm -rf "${work}"
+
+	if [ "${#missing[@]}" -gt 0 ]; then
+		echo "not in osgi/modules: ${missing[*]}"
+
+		return 1
+	fi
+
+	echo "${deployed[*]:-no module jars in the image}"
+}
+
 no_license_errors() {
 	if liferay_log | grep -iE 'license.*(invalid|expired|not found)' | tail -1 | grep .; then
 		return 1
@@ -127,6 +161,7 @@ if is_liferay_node; then
 	if [ "${RUNTIME}" = "docker" ]; then
 		check "Liferay container" container_healthy liferay
 		check "Liferay image" docker inspect --format '{{.Config.Image}}' liferay
+		check "Image modules deployed" modules_deployed
 	else
 		check "Liferay service" systemctl is-active liferay
 		check "Liferay bundle version" cat "${LIFERAY_HOME}/.liferay-ec2-version"

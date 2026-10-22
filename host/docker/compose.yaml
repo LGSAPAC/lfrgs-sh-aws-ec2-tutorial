@@ -26,8 +26,11 @@ services:
       nofile: { soft: 65536, hard: 65536 }
     volumes:
       # portal-ext.properties, OSGi configs, JGroups files and the license, rendered by
-      # render-config.sh. The image copies /etc/liferay/mount/files into /opt/liferay at startup.
-      - /opt/liferay-ec2/runtime/files:/etc/liferay/mount/files:ro
+      # render-config.sh. The image copies /mnt/liferay/files into /opt/liferay at startup.
+      # Use /mnt/liferay, not /etc/liferay/mount: if /etc/liferay/mount exists, the image
+      # ignores /mnt/liferay entirely, including /mnt/liferay/deploy, where the workspace's
+      # generated Dockerfile puts your module jars.
+      - /opt/liferay-ec2/runtime/files:/mnt/liferay/files:ro
       - liferay-data:/opt/liferay/data
       # Documents and Media: a local folder on one instance, EFS in high availability.
       - ${LIFERAY_DOCLIB_DIR:?set LIFERAY_DOCLIB_DIR in .env}:/opt/liferay/data/document_library
