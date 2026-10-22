@@ -3,7 +3,7 @@
 **Product:** Liferay DXP 2026.Q1 LTS (`2026.q1.13-lts`), self-hosted on Amazon EC2, deployed with Docker (or the traditional Tomcat bundle)
 **Audience:** Partner and customer technical teams setting up a sandbox or proof-of-concept (PoC) environment
 **Prepared by:** Liferay Customer Success APAC
-**Status:** Draft, October 2026. Sections 2 to 7 (prerequisites, tools, AWS access, Terraform plan and apply, instance bootstrap) tested on 22 October 2026 in Asia Pacific (Tokyo), single mode with the Docker runtime; sections 8 onwards not yet run on AWS. The Terraform passes `terraform validate`, every shell script passes ShellCheck, and the sample workspace's build and `linux/amd64` image jobs passed in GitHub Actions on 22 October 2026 ([run 39708712711](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace/actions/runs/39708712711)). Items to confirm are marked **🔎 Verify**.
+**Status:** Draft, October 2026. Sections 2 to 8 (prerequisites, tools, AWS access, Terraform plan and apply, instance bootstrap, first start and sign-in) tested on 22 October 2026 in Asia Pacific (Tokyo), single mode with the Docker runtime; sections 9 onwards not yet run on AWS. The Terraform passes `terraform validate`, every shell script passes ShellCheck, and the sample workspace's build and `linux/amd64` image jobs passed in GitHub Actions on 22 October 2026 ([run 39708712711](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace/actions/runs/39708712711)). Items to confirm are marked **🔎 Verify**.
 
 > ⚠️ **Read this first: this is a draft, only partly tested.**
 > Sections that have been run on a real AWS account are marked **✅ Tested** or **🟡 Partly tested**; the others have not been run yet. This guide builds Liferay on plain EC2 instances: no Kubernetes, no EKS, no Helm. It combines Liferay's documented self-hosted installation (Docker image and Tomcat bundle, Cluster Link, remote Elasticsearch) with common AWS practice (Terraform, Application Load Balancer, RDS, EFS, Systems Manager, GitHub OIDC). AWS console labels and instance types change; follow AWS documentation where it differs from this guide.
@@ -640,6 +640,8 @@ Expected `0` (the `|| true` stops `grep` from reporting a clean log as a failure
 
 > Applies to `deployment_mode = "single"`. For HA, go to section 9.
 
+> ✅ **Tested on 22 October 2026** in Asia Pacific (Tokyo) with the Docker runtime: all `verify-node.sh` checks pass, the site loads through the load balancer, `test@liferay.com` signs in, and search returns results. The Tomcat runtime (8.3) is not yet tested.
+
 ### 8.1 What is running
 
 | Service | Docker runtime | Tomcat runtime |
@@ -650,6 +652,14 @@ Expected `0` (the `|| true` stops `grep` from reporting a clean log as a failure
 | Documents and Media | `/var/lib/liferay-ec2/document_library` (bind mount) | Same (symlink from `/opt/liferay/data/document_library`) |
 
 PostgreSQL and Elasticsearch listen on `127.0.0.1` only; the security group lets only the ALB reach port 8080.
+
+**Host names Liferay accepts.** Liferay answers **HTTP 500** to any request whose `Host` header is not in `virtual.hosts.valid.hosts`, and its default list is only `localhost`, `127.0.0.1`, `[::1]` and `[0:0:0:0:0:0:0:1]`. Behind the ALB two other host names arrive: the **ALB DNS name** (browsers) and the **instance's private IP** (ALB health checks). `render-config.sh` therefore writes:
+
+```properties
+virtual.hosts.valid.hosts=localhost,127.0.0.1,[::1],[0:0:0:0:0:0:0:1],<instance-private-ip>,<alb-dns-name>[,<virtual_host>]
+```
+
+The ALB DNS name reaches the instance as `ALB_DNS_NAME` in `host.env`, and `virtual_host` is added once you set it (section 10). Without this line the target stays `unhealthy` (`Health checks failed with these codes: [500]`) and every page returns 500, while Liferay looks perfectly healthy from the instance itself. Don't use `virtual.hosts.valid.hosts=*`: it works, but it turns off Liferay's protection against forged `Host` headers.
 
 Useful commands on the instance (`aws ssm start-session`, then `sudo -i`):
 
@@ -662,19 +672,21 @@ cat /opt/liferay-ec2/runtime/files/portal-ext.properties   # contains the DB pas
 
 ### 8.2 First start
 
-The first start takes 10 to 15 minutes (database creation and index set-up). Wait for `Server startup in [n] milliseconds` in the Liferay log, then open the URL:
+The bootstrap waits for Liferay, so once section 7's check shows `Bootstrap finished`, Liferay is up. In testing the first start (database creation and index set-up) took about 2.5 minutes on an `m6i.xlarge` (`Server startup in [88997] milliseconds`), and a restart about 40 seconds. Open the URL:
 
 ```bash
 terraform -chdir=terraform output -raw liferay_url
 ```
 
-Sign in as **`test@liferay.com`** with the generated password:
+Only the IPs in `allowed_cidrs` can open it, over plain HTTP until section 10 (browsers show "Not secure"; that is expected for now).
+
+Sign in as **`test@liferay.com`** with the generated password. Print it **in your own terminal** rather than pasting it into chat or documents:
 
 ```bash
 $(terraform -chdir=terraform output -raw admin_password_command)
 ```
 
-Liferay may ask you to change the password and accept the terms of use on first sign-in. Store the new password in your password manager.
+Click **Sign In**, enter `test@liferay.com` and the 20-character password. Liferay may ask you to accept the terms of use and set a new password; store the new one in your password manager. The value in SSM Parameter Store doesn't change, and Liferay only uses it when the database is first created.
 
 ### 8.3 Tomcat runtime details
 
@@ -709,15 +721,66 @@ PASS  Liferay image                      liferay/dxp:2026.q1.13-lts
 PASS  Database reachable                 127.0.0.1:5432 reachable
 PASS  Elasticsearch reachable            status green, 1 node(s)
 PASS  Liferay HTTP on 8080               HTTP 200 from http://127.0.0.1:8080/c/portal/robots
-PASS  Server started                     ... Server startup in [...] milliseconds
-PASS  License registered                 ... License registered ...
+PASS  Accepts ALB health-check host      HTTP 200 from http://127.0.0.1:8080/c/portal/robots (Host: 10.20.1.14)
+PASS  Accepts ALB host name              HTTP 200 from http://127.0.0.1:8080/c/portal/robots (Host: liferay-poc-<n>.ap-northeast-1.elb.amazonaws.com)
+PASS  Server started                     ... Catalina.start Server startup in [88997] milliseconds
+PASS  License registered                 ... License registered for DXP Development
 PASS  No license errors                  none found
 PASS  Documents and Media writable       /dev/nvme0n1p1 9% used
 
 All checks passed
 ```
 
-✅ In the browser: the home page loads with styles, you can sign in, and **Control Panel → System → Search** shows an active connection to Elasticsearch 8.19.
+After a restart, `License registered` shows `DXP Development license validation passed` instead; both mean the key is active.
+
+✅ The load balancer sees the instance as healthy:
+
+```bash
+aws elbv2 describe-target-health \
+  --target-group-arn "$(aws elbv2 describe-target-groups --names "${STACK}-liferay" --query 'TargetGroups[0].TargetGroupArn' --output text)" \
+  --query 'TargetHealthDescriptions[].[Target.Id, TargetHealth.State, TargetHealth.Reason]' --output text
+```
+
+Expected `i-...  healthy  None`.
+
+✅ The site loads through the load balancer, with its CSS:
+
+```bash
+URL=$(terraform -chdir=terraform output -raw liferay_url)
+curl -s -o /dev/null -w 'robots: %{http_code}\n' "${URL}/c/portal/robots"
+curl -sL "${URL}/" | grep -o '<title>[^<]*</title>'
+```
+
+Expected `robots: 200` and `<title>Home - Liferay DXP</title>`. In the browser the home page has the Liferay theme (not unstyled text).
+
+✅ Search works. The Liferay indexes exist and are green, and a guest search through the load balancer finds content:
+
+```bash
+scripts/run-on-stack.sh "${STACK}" liferay 'curl -s "http://127.0.0.1:9200/_cat/indices?h=health,index,docs.count&s=index" | head -3'
+curl -sL "${URL}/search?q=liferay" | grep -oE '[0-9]+ Results? for'
+```
+
+Expected `green liferay-<company-id> <documents>` among the indexes (about 480 documents on a new site), and `2 Results for`. In the browser, **Control Panel → System → Search** shows an active connection to Elasticsearch 8.19.
+
+✅ Sign-in is recorded. After you sign in:
+
+```bash
+scripts/run-on-stack.sh "${STACK}" liferay "docker exec postgres psql -U liferay -d lportal -At -F ' | ' -c \"select emailaddress, logindate, passwordreset from user_ where emailaddress = 'test@liferay.com';\""
+```
+
+Expected `test@liferay.com | <the time you signed in, UTC> | f`.
+
+### What else to expect in the log
+
+Seen in testing; none of them stops the PoC:
+
+| Log line | Meaning | What to do |
+| --- | --- | --- |
+| `java.lang.RuntimeException: Invalid host name ...` with `{code="500", ...}` | A `Host` header not in `virtual.hosts.valid.hosts` | Expected only for stacks created before the fix (section 16). Otherwise check `ALB_DNS_NAME` in `/etc/liferay-ec2/host.env` |
+| `NullPointerException: ... "liveGroup" is null` at `PasswordModifiedFilter.processFilter`, once, right after a start | A request arrived while Liferay was still initializing the site | Ignore if it doesn't repeat. 🔎 |
+| `Email test@domain.invalid will be ignored because it is included in blacklist` and `Skipping email because the sender is not specified` | No mail server configured, so notification emails (password changes, invitations, workflow) are skipped | Fine for a PoC. Configure SMTP, for example Amazon SES, before real users rely on email (section 14) |
+
+> ⚠️ **Liferay records the load balancer's IP, not the user's.** In testing, `user_.loginip` was `10.20.7.37`, an internal ALB address, because Liferay and Tomcat ignore the ALB's `X-Forwarded-For` header by default. Login history, audit events and IP-based rules all see the ALB. For production, configure Tomcat's `RemoteIpValve` (or the equivalent Liferay setting for your release) to trust the ALB's subnets. 🔎 Not yet done in this guide.
 
 ---
 
@@ -994,6 +1057,8 @@ Consistent backups: Liferay's database and Documents and Media must be restored 
 | Secrets | SSM Parameter Store, Terraform state | Same with a customer-managed KMS key, or Secrets Manager with rotation; remote, encrypted Terraform state |
 | CI/CD | Deploy on push to `main` after approval | Separate stacks per environment (`dev`, `uat`, `prod`), promotion by tag, required reviewers on `prod` |
 | Observability | Logs on the instance | CloudWatch Logs and alarms, or your APM; Liferay's own monitoring |
+| Email | None (notifications skipped) | Amazon SES (or your SMTP relay) with a verified sender domain |
+| Client IP | Liferay sees the ALB's IP | Tomcat `RemoteIpValve` trusting the ALB subnets, so audit logs and IP rules see the real user 🔎 |
 | Upgrades | Swap image/bundle | Liferay's upgrade process (database upgrade tool), rehearsed on a copy of production |
 
 ---
@@ -1035,7 +1100,10 @@ aws ssm get-parameters-by-path --path "/${STACK}" --query 'length(Parameters)'
 | `render-config.sh`: `AccessDeniedException` on `ssm:GetParameter` | Instance role policy or parameter names don't match | `aws ssm get-parameters-by-path --path /<stack>`; check the role's `ReadStackParameters` statement |
 | `WARNING: no license at s3://...` | `license_file` not found at apply time | Copy the key to `license/license.xml`, `terraform apply`, then re-run `render-config.sh` and restart Liferay (see `license/README.md`) |
 | ALB target `unhealthy` with `Target.Timeout` or `Target.FailedHealthChecks` during the first 15 minutes | First start still running | Wait; watch the Liferay log |
-| ALB target stays `unhealthy`; Liferay log shows `Server startup` | Health check path or port | `curl -i http://127.0.0.1:8080/c/portal/robots` on the instance; it must return 200 🔎 |
+| ALB target `unhealthy` with `Health checks failed with these codes: [500]`; every page returns 500; Liferay log shows `Invalid host name <ip or alb-dns-name>` | The host name is not in `virtual.hosts.valid.hosts` (section 8.1). Stacks created before this guide added `ALB_DNS_NAME` (October 2026) have it missing | Add it and re-render: `scripts/run-on-stack.sh <stack> liferay "grep -q '^ALB_DNS_NAME=' /etc/liferay-ec2/host.env \|\| echo 'ALB_DNS_NAME=<alb-dns-name>' >> /etc/liferay-ec2/host.env; aws s3 sync s3://<artifact-bucket>/host/ /opt/liferay-ec2/ --only-show-errors; chmod 755 /opt/liferay-ec2/scripts/*.sh; /opt/liferay-ec2/scripts/render-config.sh; docker restart liferay; /opt/liferay-ec2/scripts/wait-for-liferay.sh"` (Tomcat runtime: `systemctl restart liferay`) |
+| ALB target stays `unhealthy` with another code or a timeout; Liferay log shows `Server startup` | Health check path or port | `curl -i http://127.0.0.1:8080/c/portal/robots` on the instance; it must return 200 |
+| Login history and audit logs show `10.20.x.x` for every user | Liferay sees the ALB's IP, not `X-Forwarded-For` | Section 8, "What else to expect in the log" |
+| No emails arrive (password changes, invitations); log says `Skipping email because the sender is not specified` | No mail server configured | Configure SMTP (for example Amazon SES) in **Control Panel → Server Administration → Mail** or in `portal-ext.properties` |
 | Liferay never finishes starting; log mentions license | Missing or invalid key, or single-node key in a cluster | Check `/opt/liferay/deploy`, the license log lines, and use a cluster-capable key for HA |
 | Liferay shuts down soon after start, log mentions Elasticsearch | Wrong Elasticsearch version or unreachable | `curl http://<es>:9200`; keep 8.19.x; check the search security group |
 | Elasticsearch container restarts; log mentions `max virtual memory areas` | `vm.max_map_count` too low | `sysctl vm.max_map_count`; re-run the bootstrap |
@@ -1060,15 +1128,17 @@ aws ssm get-parameters-by-path --path "/${STACK}" --query 'length(Parameters)'
 
 Confirm these before relying on the guide for anything beyond a sandbox:
 
-1. **Health check path** `/c/portal/robots` returns 200 on DXP 2026.Q1 once Liferay is ready (used by the ALB and the scripts).
-2. **Docker mount path**: the `liferay/dxp` 2026.Q1 image copies `/etc/liferay/mount/files` into `/opt/liferay` at startup, including `deploy/license.xml`, `osgi/configs` and `jgroups/`.
+1. ✅ **Health check path** `/c/portal/robots` returns 200 on DXP 2026.Q1 once Liferay is ready, **provided the request's host name is in `virtual.hosts.valid.hosts`** (section 8.1). Confirmed on 22 October 2026; the guide originally missed the valid-hosts list, which made the ALB health check fail with 500.
+2. 🟡 **Docker mount path**: the `liferay/dxp` 2026.Q1 image copies `/etc/liferay/mount/files` into `/opt/liferay` at startup. Confirmed for `portal-ext.properties`, `deploy/license.xml` and `osgi/configs`; `jgroups/` (HA) not yet tested.
 3. **JGroups stack** (section 9.4): protocol names and `JDBC_PING` attributes match the JGroups version in your release; `cluster.link.autodetect.address` behaves as expected with host networking.
 4. **Forwarded-header properties** `web.server.forwarded.host.enabled` and `web.server.forwarded.protocol.enabled` behind the ALB (section 10).
-5. **Elasticsearch 8.19.20** is in the DXP 2026.Q1 compatibility matrix, and the `elasticsearch8` OSGi configuration keys are current.
-6. **PostgreSQL 16** (container and RDS) is in the compatibility matrix for your release.
-7. **License log lines** used by `verify-node.sh` match what your release prints.
+5. 🟡 **Elasticsearch 8.19.20** works with DXP 2026.Q1.13 using the `elasticsearch8` OSGi configuration (tested: green indexes, search results). Still check it is in the compatibility matrix for your release.
+6. 🟡 **PostgreSQL 16** works as the container (tested); RDS not yet tested. Still check the compatibility matrix.
+7. ✅ **License log lines** used by `verify-node.sh`: `License registered for DXP Development` on first start and `DXP Development license validation passed` after a restart (confirmed with a DXP Development key).
 8. **Tomcat bundle layout**: `.tar.gz` next to the `.7z` named in `release.properties`, a single top folder, and a `tomcat*` folder inside.
 9. **Costs** in section 1 for your region (use the AWS Pricing Calculator).
+10. **Client IP behind the ALB**: how to make Liferay record `X-Forwarded-For` (Tomcat `RemoteIpValve` or a Liferay property) in the Docker image and the Tomcat bundle (section 8).
+11. **The `PasswordModifiedFilter` `NullPointerException`** seen once right after a start (section 8) is harmless and doesn't recur.
 
 ---
 
