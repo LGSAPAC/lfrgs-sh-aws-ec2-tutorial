@@ -1232,7 +1232,7 @@ Consistent backups: Liferay's database and Documents and Media must be restored 
 
 ## 15. Tear down the environment
 
-> ✅ **Tested on 22 October 2026** in Asia Pacific (Tokyo), single mode: `Destroy complete` for all 58 resources in about 1 minute, and nothing left afterwards.
+> ✅ **Tested on 22 and 23 October 2026** in Asia Pacific (Tokyo): single mode destroyed 58 resources in about 1 minute; high availability destroyed 79 in about 10 minutes (RDS 5.5 minutes, NAT gateway 1 minute). Nothing was left afterwards either time, and no RDS snapshot was kept (`force_destroy = true`).
 
 Preview it first, then destroy:
 
