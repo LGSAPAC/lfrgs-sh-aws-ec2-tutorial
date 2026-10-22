@@ -987,7 +987,7 @@ Your code (OSGi modules, client extensions, configuration) lives in a **Liferay 
 ```text
 git push ─▶ build (Gradle, JDK 21) ─▶ image (linux/amd64) ─▶ ECR ─┐
                                    └▶ Tomcat artifacts ─▶ S3 ─────┤
-                                                                  ▼
+                                                                  ▼  only on "Run workflow" or a v* tag
                         deploy (environment "ec2") ─▶ SSM Run Command, one node at a time
                                 ├─ docker: deploy-docker.sh <ecr-image>   (pull, recreate, wait, roll back on failure)
                                 └─ tomcat: deploy-tomcat.sh <s3-archive>  (hot deploy; restart only if configs changed)
@@ -1030,7 +1030,7 @@ gh api -X POST "repos/${REPO}/environments/ec2/deployment-branch-policies" -f na
 gh api -X POST "repos/${REPO}/environments/ec2/deployment-branch-policies" -f name='v*' -f type=tag
 ```
 
-**Approval before each deployment (required reviewers)** needs **GitHub Team or Enterprise** for a private repository; on **GitHub Free** it is available only for public repositories. On a Free organization GitHub refuses it with `Failed to create the environment protection rule. Please ensure the billing plan supports the required reviewers protection rule.` Check your organization's plan with `gh api orgs/<org> --jq .plan.name`. Without reviewers, every push to `main` deploys straight away (in single mode, Liferay is unavailable for about a minute while the container restarts). On Team or Enterprise, add yourself under **Settings → Environments → ec2 → Required reviewers**.
+**Approval before each deployment (required reviewers)** needs **GitHub Team or Enterprise** for a private repository; on **GitHub Free** it is available only for public repositories. On a Free organization GitHub refuses it with `Failed to create the environment protection rule. Please ensure the billing plan supports the required reviewers protection rule.` Check your organization's plan with `gh api orgs/<org> --jq .plan.name`. That's why the sample workflow deploys **on demand only** (section 12.3): a push to `main` never deploys by itself, which matters because each deploy restarts Liferay (in single mode it is unavailable for about a minute). On Team or Enterprise you can also add yourself under **Settings → Environments → ec2 → Required reviewers**.
 
 **Check the OIDC subject your repository sends.** Newer repositories use GitHub's **immutable subject** format, which adds the owner and repository IDs:
 
@@ -1042,13 +1042,23 @@ If the output shows `"use_immutable_subject":true`, copy its `sub_claim_prefix` 
 
 ### 12.3 Run the pipeline
 
-Push to `main`, or start it by hand: **Actions → CI/CD → Run workflow**.
+Every push and pull request builds; pushes to `main` also build and push the image. **Deploying is on demand**:
+
+- **Run workflow:** **Actions → CI/CD → Run workflow**, choose `main` (or a `v*` tag to redeploy that release), keep **Deploy to the EC2 instances** ticked, **Run workflow**. Or from the CLI:
+
+  ```bash
+  gh workflow run ci.yml --repo <org>/<your-workspace> --ref main -f deploy=true
+  ```
+
+- **Release tag:** `git tag v1.0.0 && git push origin v1.0.0` builds image `1.0.0` and deploys it. 🔎 Not yet tested.
+
+Tested on 22 October 2026: a push to `main` built and pushed `main-1041124` with `deploy` skipped and Liferay untouched ([run 39729765649](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace/actions/runs/39729765649)); a **Run workflow** with **Deploy** then rolled it out ([run 39730255875](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace/actions/runs/39730255875), `deploy` 1.5 minutes).
 
 | Job | Runs on | What it does |
 | --- | --- | --- |
 | `build` | Every push and pull request | `./gradlew build dockerDeploy createDockerfile`, checks the Docker context, packages `liferay-artifacts-<tag>.tar.gz` |
 | `image` | Pushes to `main`, `v*` tags, manual runs | Builds the `linux/amd64` image, checks its contents, pushes to ECR when the AWS variables exist |
-| `deploy` | Pushes to `main`, `v*` tags, manual runs, when `LIFERAY_STACK` is set | Runs in environment `ec2` (waits for approval if it has required reviewers), then rolls out through SSM, one node at a time, and fails on the first node that does not become ready |
+| `deploy` | **On demand**: manual runs with **Deploy** ticked (on `main` or a `v*` tag) and pushed `v*` tags, when `LIFERAY_STACK` is set. **Skipped** on pushes to `main` | Runs in environment `ec2` (waits for approval if it has required reviewers), then rolls out through SSM, one node at a time, and fails on the first node that does not become ready |
 
 **Image tags:** a `v1.2.0` git tag gives `1.2.0`; anything else gives `<branch>-<short-sha>`, for example `main-1a2b3c4`.
 
@@ -1056,12 +1066,12 @@ Tested timings (single mode): `build` 1 minute, `image` 4 minutes (about 3.1 GB,
 
 ### 12.4 Roll back
 
-- **Docker runtime:** a node that does not become ready rolls itself back to the previous image, and the rollout stops, so other nodes keep the old image. To return to an older build on purpose, re-run the old workflow run's `deploy` job, or run on the stack: `scripts/run-on-stack.sh <stack> liferay '/opt/liferay-ec2/scripts/deploy-docker.sh <ecr-repo>:<old-tag>'` (HA: one node at a time).
+- **Docker runtime:** a node that does not become ready rolls itself back to the previous image, and the rollout stops, so other nodes keep the old image. To return to an older build on purpose, **Run workflow** on its `v*` tag, re-run the old workflow run's `deploy` job, or run on the stack: `scripts/run-on-stack.sh <stack> liferay '/opt/liferay-ec2/scripts/deploy-docker.sh <ecr-repo>:<old-tag>'` (HA: one node at a time).
 - **Tomcat runtime:** re-run the `deploy` job of the older run (its archive is still in `builds/` for 90 days). Hot deploy replaces bundles with the same symbolic name; to remove a module entirely, delete its jar from `/opt/liferay/osgi/modules` and restart.
 
 ### Verify
 
-1. ✅ The workflow run is green; the `deploy` job's log shows `Final status: Success` and each node's output ends with `Deployed <image>` (Docker) or `Deployment finished` (Tomcat).
+1. ✅ A push to `main` builds and pushes the image, and the `deploy` job is **skipped** (Liferay keeps running). A **Run workflow** with **Deploy** ticked is green; the `deploy` job's log shows `Final status: Success` and each node's output ends with `Deployed <image>` (Docker) or `Deployment finished` (Tomcat).
 2. ✅ ECR has the image:
 
    ```bash
