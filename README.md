@@ -951,7 +951,7 @@ Then check by hand:
 
 > 🟡 **Partly tested on 22 October 2026:** the `build` and `image` jobs passed ([run 39708712711](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace/actions/runs/39708712711)). Pushing to ECR and the `deploy` job are **not yet tested** against a real stack.
 
-Your code (OSGi modules, client extensions, configuration) lives in a **Liferay Workspace** and reaches the instances through GitHub Actions. A ready-made workspace for this guide is **[LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace)** (DXP `2026.q1.13-lts`, a sample portlet and a global CSS client extension).
+Your code (OSGi modules, client extensions, configuration) lives in a **Liferay Workspace** and reaches the instances through GitHub Actions. A ready-made workspace for this guide is **[LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace)** (DXP `2026.q1.13-lts`, a sample OSGi portlet, a global CSS client extension and a React custom element client extension built with Vite).
 
 ```text
 git push ─▶ build (Gradle, JDK 21) ─▶ image (linux/amd64) ─▶ ECR ─┐
@@ -1018,10 +1018,27 @@ Push to `main`, or start it by hand: **Actions → CI/CD → Run workflow**.
 
    ```bash
    scripts/run-on-stack.sh "${STACK}" liferay 'docker inspect --format "{{.Config.Image}}" liferay 2>/dev/null || cat /opt/liferay/.liferay-ec2-version'
-   scripts/run-on-stack.sh "${STACK}" liferay '/opt/liferay-ec2/scripts/liferay-log.sh | grep -E "STARTED com.liferay.ec2.sample.portlet|ec2-sample-global-css" | tail -2'
+   scripts/run-on-stack.sh "${STACK}" liferay '/opt/liferay-ec2/scripts/liferay-log.sh | grep -E "STARTED (com.liferay.ec2.sample.portlet|ec2sampleglobalcss|ec2samplereactapp)" | tail -3'
    ```
 
-4. ✅ In Liferay: add the **EC2 Sample** widget (category **Sample**) to a page. It shows *Hello from Liferay self-hosted on Amazon EC2* and the serving node. Under the page's **Design → CSS Client Extensions**, add **EC2 Sample Global CSS**: the page gets an orange top border. In HA, the widget shows the same text on both nodes.
+   Expected one `STARTED` line each for the portlet and the two client extensions (client extensions start under their project ID: `ec2sampleglobalcss`, `ec2samplereactapp`). 🔎
+
+4. ✅ The React app's files are served through the load balancer:
+
+   ```bash
+   URL=$(terraform -chdir=terraform output -raw liferay_url)
+   curl -s -o /dev/null -w 'main.js: %{http_code} %{content_type}\n' "${URL}/o/ec2-sample-react-app/main.js"
+   curl -s -o /dev/null -w 'index.css: %{http_code} %{content_type}\n' "${URL}/o/ec2-sample-react-app/assets/index.css"
+   ```
+
+   Expected `200` with a JavaScript and a CSS content type. A `404` means the zip didn't deploy, or its `assemble` block is wrong.
+
+5. ✅ In Liferay, signed in, edit a page:
+   - Add the **EC2 Sample** widget (category **Sample**). It shows *Hello from Liferay self-hosted on Amazon EC2* and the serving node.
+   - Add the **EC2 Sample React App** widget (category **Client Extensions**). It shows *Hello from React on Amazon EC2*, then *Signed in as Test Test (test@liferay.com), read from /o/headless-admin-user*, which proves the React app called Liferay's API with your session. The button counts clicks. Signed out, it says you are a guest.
+   - Under the page's **Design → CSS Client Extensions**, add **EC2 Sample Global CSS**: the page gets an orange top border.
+   - In HA, both widgets show the same on every node.
+   - **Control Panel → Applications → Client Extensions** lists **EC2 Sample Global CSS** and **EC2 Sample React App**.
 
 ---
 
