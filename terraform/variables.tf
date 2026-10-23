@@ -37,13 +37,19 @@ variable "liferay_runtime" {
 }
 
 variable "liferay_version" {
-  description = "Liferay DXP release, as in releases.liferay.com. Sets the stock Docker image tag and the Tomcat bundle."
+  description = "Liferay DXP release, as in releases.liferay.com (without the dxp- prefix). Sets the stock Docker image tag and the Tomcat bundle. 2026.q3.8 is the latest promoted release; for the LTS line use 2026.q1.13-lts (the release this guide was first tested with)."
   type        = string
-  default     = "2026.q1.13-lts"
+  default     = "2026.q3.8"
+}
+
+variable "enable_mcp" {
+  description = "Turn on Liferay's MCP server at /o/mcp (2026.Q3 and later): the beta feature flag LPD-63311 plus MCPServerConfiguration enabled. Connect Claude to it through an SSM tunnel (section 11.2)."
+  type        = bool
+  default     = true
 }
 
 variable "elasticsearch_version" {
-  description = "Elasticsearch version for the search service. 8.19.20 is the sidecar version DXP 2026.Q1.13 ships."
+  description = "Elasticsearch version for the search service. 8.19.20 is the sidecar version DXP 2026.Q3.8 (and 2026.Q1.13) ships."
   type        = string
   default     = "8.19.20"
 }
@@ -101,7 +107,7 @@ variable "db_instance_class" {
 }
 
 variable "db_engine_version" {
-  description = "RDS PostgreSQL major version (ha mode). Check it is in the DXP 2026.Q1 compatibility matrix."
+  description = "RDS PostgreSQL major version (ha mode). Check it is in the compatibility matrix of your DXP release."
   type        = string
   default     = "16"
 }

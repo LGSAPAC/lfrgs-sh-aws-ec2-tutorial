@@ -24,7 +24,7 @@ services:
       LIFERAY_JVM_OPTS: ${LIFERAY_JVM_OPTS:--Xms6g -Xmx6g}
       # The image ships a single-node trial key. Your key comes from S3 (deploy/license.xml);
       # in a cluster the trial key fails with "Developer licenses do not allow for clustering".
-      # 2026.Q1 images read LIFERAY_CONTAINER_DISABLE_TRIAL_LICENSE (the older
+      # 2026.Q1 and 2026.Q3 images read LIFERAY_CONTAINER_DISABLE_TRIAL_LICENSE (the older
       # LIFERAY_DISABLE_TRIAL_LICENSE is ignored) and then delete the trial key files.
       LIFERAY_CONTAINER_DISABLE_TRIAL_LICENSE: "true"
     ulimits:

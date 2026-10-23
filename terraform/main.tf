@@ -34,6 +34,7 @@ locals {
     HTTPS           = tostring(local.https)
     VIRTUAL_HOST    = var.virtual_host
     ALB_DNS_NAME    = aws_lb.main.dns_name
+    MCP_ENABLED     = tostring(var.enable_mcp)
   }
 }
 

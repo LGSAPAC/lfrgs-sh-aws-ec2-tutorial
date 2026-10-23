@@ -1,9 +1,9 @@
 # Liferay DXP Self-Hosted on Amazon EC2: Step-by-Step Guide
 
-**Product:** Liferay DXP 2026.Q1 LTS (`2026.q1.13-lts`), self-hosted on Amazon EC2, deployed with Docker (or the traditional Tomcat bundle)
+**Product:** Liferay DXP 2026.Q3 (`2026.q3.8`) by default, or 2026.Q1 LTS (`2026.q1.13-lts`), self-hosted on Amazon EC2, deployed with Docker (or the traditional Tomcat bundle), with Liferay's MCP server on for Claude
 **Audience:** Partner and customer technical teams setting up a sandbox or proof-of-concept (PoC) environment
 **Prepared by:** Liferay Customer Success APAC
-**Status:** Draft, October 2026. Sections 2 to 9, 11, 12 and 15 tested on 22 and 23 October 2026 in Asia Pacific (Tokyo): single mode end to end with both the Docker and the Tomcat runtime, and high availability with the Docker runtime (two clustered nodes, RDS Multi-AZ, EFS, failover, cache replication, rolling CI deploy). Not yet run on AWS: section 10 (HTTPS), section 13 (backups and monitoring) and high availability with the Tomcat runtime. The Terraform passes `terraform validate`, every shell script passes ShellCheck, and the sample workspace's build and `linux/amd64` image jobs passed in GitHub Actions on 22 October 2026 ([run 39708712711](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace/actions/runs/39708712711)). Items to confirm are marked **🔎 Verify**.
+**Status:** Draft, October 2026. Sections 2 to 9, 11, 12 and 15 tested on 22 and 23 October 2026 in Asia Pacific (Tokyo): single mode end to end with both the Docker and the Tomcat runtime, and high availability with the Docker runtime (two clustered nodes, RDS Multi-AZ, EFS, failover, cache replication, rolling CI deploy). All of that ran with **DXP 2026.Q1.13 LTS**. The default is now **2026.Q3.8** with the MCP server on (sections 11.1 and 11.2); the 2026.Q3 build and image pass in GitHub Actions, but **2026.Q3 and MCP haven't been run on AWS yet**. Also not yet run on AWS: section 10 (HTTPS), section 13 (backups and monitoring) and high availability with the Tomcat runtime. The Terraform passes `terraform validate`, every shell script passes ShellCheck, and the sample workspace's build and `linux/amd64` image jobs passed in GitHub Actions on 22 October 2026 ([run 39708712711](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace/actions/runs/39708712711)). Items to confirm are marked **🔎 Verify**.
 
 > ⚠️ **Read this first: this is a draft, only partly tested.**
 > Sections that have been run on a real AWS account are marked **✅ Tested** or **🟡 Partly tested**; the others have not been run yet. This guide builds Liferay on plain EC2 instances: no Kubernetes, no EKS, no Helm. It combines Liferay's documented self-hosted installation (Docker image and Tomcat bundle, Cluster Link, remote Elasticsearch) with common AWS practice (Terraform, Application Load Balancer, RDS, EFS, Systems Manager, GitHub OIDC). AWS console labels and instance types change; follow AWS documentation where it differs from this guide.
@@ -83,7 +83,7 @@ Two deployment modes and two ways to run Liferay, chosen with two Terraform vari
 
 | | `liferay_runtime = "docker"` (recommended) | `liferay_runtime = "tomcat"` |
 | --- | --- | --- |
-| **How Liferay runs** | `liferay/dxp:2026.q1.13-lts` container, or your custom image from ECR | DXP Tomcat bundle in `/opt/liferay`, `liferay` systemd service, Amazon Corretto 21 |
+| **How Liferay runs** | `liferay/dxp:<liferay_version>` container (default `2026.q3.8`), or your custom image from ECR | DXP Tomcat bundle in `/opt/liferay`, `liferay` systemd service, Amazon Corretto 21 |
 | **What CI/CD deploys** | A new image (workspace code baked in), node by node | Module jars and client extension zips into `deploy/` (hot deploy), node by node |
 | **Upgrades** | New image tag | New bundle (`liferay_version`), re-run the bootstrap |
 | **Choose it when** | You want immutable, repeatable deployments | Your team already operates Tomcat bundles, or policy forbids containers for the application |
@@ -132,7 +132,7 @@ Pick one region for everything. This guide was tested in **Asia Pacific (Tokyo),
   | `developer-cluster`, `production`, `enterprise` | Depends on the subscription; look for a node or server count in the file | |
 
   Check yours with `grep -E '<(license-type|license-name|max-cluster-nodes|max-http-sessions|expiration-date)>' license/license.xml`. Keep `liferay_node_count` at or below `<max-cluster-nodes>`. "Liferay Trial Activation" keys come in both kinds, so check the type rather than the account name.
-- Ask your Liferay representative or Liferay Support for a cluster-capable key for DXP 2026.Q1 (7.4).
+- Ask your Liferay representative or Liferay Support for a cluster-capable key for DXP 2026 quarterly releases (product version 7.4; the same key works for 2026.Q1 and 2026.Q3).
 - Copy it to `license/license.xml` (see [`license/README.md`](license/README.md)). It is git-ignored; Terraform uploads it to a private S3 bucket.
 
 ### 2.4 GitHub
@@ -416,8 +416,9 @@ Edit `terraform/terraform.tfvars`. The important settings:
 | `name` | `liferay-poc` | Stack name: prefixes resources, tags instances `LiferayStack=<name>`, names SSM parameters `/<name>/...` |
 | `deployment_mode` | `single` or `ha` | Section 1 |
 | `liferay_runtime` | `docker` or `tomcat` | Section 1 |
-| `liferay_version` | `2026.q1.13-lts` | Image tag `liferay/dxp:<version>` and the Tomcat bundle. Latest promoted release in <https://releases.liferay.com/releases.json> |
-| `elasticsearch_version` | `8.19.20` | The sidecar version DXP 2026.Q1.13 ships with |
+| `liferay_version` | `2026.q3.8` | Image tag `liferay/dxp:<version>` and the Tomcat bundle. `2026.q3.8` is the latest promoted release (not LTS); `2026.q1.13-lts` is the LTS line. List releases with `curl -s https://releases.liferay.com/releases.json \| jq -r '.[] \| select(.promoted=="true") \| .releaseKey'`. Keep it equal to `liferay.workspace.product` in the sample workspace (without `dxp-`) |
+| `enable_mcp` | `true` | Liferay's MCP server at `/o/mcp` for Claude (sections 11.1, 11.2). Beta in 2026.Q3 |
+| `elasticsearch_version` | `8.19.20` | The sidecar version DXP 2026.Q3.8 and 2026.Q1.13 ship with |
 | `allowed_cidrs` | `["203.0.113.10/32"]` | Who can open Liferay. Find your IP with `curl -s https://checkip.amazonaws.com` and add `/32`. If your IP changes (another network, VPN), update it and `terraform -chdir=terraform apply` |
 | `license_file` | `../license/license.xml` | Uploaded to S3 by Terraform |
 | `github_repository` | `LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace` | Repository allowed to deploy (section 12). Empty skips the CI/CD role |
@@ -660,7 +661,7 @@ Expected `0` (the `|| true` stops `grep` from reporting a clean log as a failure
 
 | Service | Docker runtime | Tomcat runtime |
 | --- | --- | --- |
-| Liferay DXP | Container `liferay` (`liferay/dxp:2026.q1.13-lts`), host network, port 8080 | systemd service `liferay` running as user `liferay` (UID 1001), `/opt/liferay/tomcat`, port 8080, logs in the journal (`journalctl -u liferay`) and `/opt/liferay/logs` |
+| Liferay DXP | Container `liferay` (`liferay/dxp:<liferay_version>`), host network, port 8080 | systemd service `liferay` running as user `liferay` (UID 1001), `/opt/liferay/tomcat`, port 8080, logs in the journal (`journalctl -u liferay`) and `/opt/liferay/logs` |
 | PostgreSQL 16 | Container `postgres`, `127.0.0.1:5432`, volume `liferay_postgres-data` | Same |
 | Elasticsearch 8.19 | Container `elasticsearch`, `127.0.0.1:9200`, volume `liferay_elasticsearch-data` | Same |
 | Documents and Media | `/var/lib/liferay-ec2/document_library` (bind mount) | Same (symlink from `/opt/liferay/data/document_library`) |
@@ -761,6 +762,8 @@ PASS  Documents and Media writable       /dev/nvme0n1p1 9% used
 
 All checks passed
 ```
+
+With `enable_mcp = true` there is one more line, `PASS  MCP server at /o/mcp  HTTP 401 from /o/mcp without credentials` (section 11.1; the output above is from a 2026.Q1 test before MCP was added).
 
 After a restart, `License registered` shows `DXP Development license validation passed` instead; both mean the key is active. `Image modules deployed` lists the workspace's jars once you deploy a custom image (section 12).
 
@@ -1025,7 +1028,7 @@ All checks passed
 Deployment verified
 ```
 
-Then check by hand. Control Panel paths are as in DXP 2026.Q1: open the applications menu and choose the **Control Panel** tab (next to **Applications** and **Commerce**), where links are grouped under **Users**, **Sites**, **Accounts**, **Configuration**, **Notifications**, **Object**, **Security**, **System** and **Marketplace**.
+Then check by hand. Control Panel paths are as tested in DXP 2026.Q1: open the applications menu and choose the **Control Panel** tab (next to **Applications** and **Commerce**), where links are grouped under **Users**, **Sites**, **Accounts**, **Configuration**, **Notifications**, **Object**, **Security**, **System** and **Marketplace**.
 
 | Check | How | Expected |
 | --- | --- | --- |
@@ -1048,6 +1051,112 @@ scripts/run-on-stack.sh "${STACK}" liferay "docker exec postgres psql -U liferay
 ```
 
 Expected the file you uploaded, with its size in bytes; the same row after the restart. A new site already has about 15 documents (images from the site template), so look for your file's title rather than a count.
+
+### 11.1 Liferay's MCP server
+
+> 🔎 **Not yet run on AWS.** The setup follows the behaviour the sample workspace's `mcp-server` guide documents for DXP 2026.Q3 (`.claude/skills/mcp-server/SKILL.md`); the steps below haven't been run against an EC2 stack yet.
+
+With `enable_mcp = true` (the default) and DXP **2026.Q3 or later**, every Liferay node serves the **Model Context Protocol** at `/o/mcp`, so an AI client such as Claude can work with Liferay's headless APIs (sites, pages, content, objects, users) as tools. `render-config.sh` turns on both pieces 2026.Q3 needs:
+
+- the feature flag in `portal-ext.properties`: `feature.flag.LPD-63311=true` (**beta** in 2026.Q3, so keep it to non-production environments such as this PoC);
+- `osgi/configs/com.liferay.mcp.server.rest.internal.configuration.MCPServerConfiguration.config` with `enabled=B"true"`. Without this file, 2026.Q3 returns HTTP 404 at `/o/mcp` and logs nothing.
+
+Things to know about the 2026.Q3 server:
+
+| | 2026.Q3 behaviour |
+| --- | --- |
+| Endpoint and transport | `/o/mcp`, **Streamable HTTP**. Clients set to SSE show "Disconnected" |
+| Authentication | HTTP Basic with a Liferay user's email address and password. Wrong or missing credentials get HTTP 401, including on connect |
+| Tools | Four meta tools: `getToolSetsPage` lists the tool sets (one per headless API, for example `headless-admin-user-v1.0`), `getToolSetToolSetNameToolSummariesPage` lists a set's tools, `getToolSetToolSetNameTool` returns a tool's input schema, and `postToolSetToolSetNameToolInvoke` calls it |
+| Data masking | Personal data in responses is masked by default: an email address comes back as `[EMAIL_ADDRESS]`, phone numbers as `[PHONE_NUMBER]`, IP addresses as their subnet. Don't mistake a masked value for stored data |
+| Permissions | Every call runs as the user whose credentials you give, with that user's permissions |
+
+2026.Q1 LTS (`2026.q1.13-lts`) has an older MCP server (flag only, `call-http-endpoint` tools, credentials checked only on tool calls). With that release the MCP configuration file is harmless but unused.
+
+To turn the server off, set `enable_mcp = false`, `terraform -chdir=terraform apply`, change `MCP_ENABLED` to `false` in `/etc/liferay-ec2/host.env` on each Liferay node (existing nodes don't pick up new user data), re-run `render-config.sh` and restart Liferay.
+
+#### Verify
+
+```bash
+scripts/run-on-stack.sh "${STACK}" liferay 'sudo /opt/liferay-ec2/scripts/verify-node.sh | grep -E "MCP|checks"'
+```
+
+✅ Expected: `PASS  MCP server at /o/mcp  HTTP 401 from /o/mcp without credentials` (401 means the server is there and wants credentials; 404 means the flag or the configuration file isn't in effect, section 16).
+
+### 11.2 Connect Claude to Liferay
+
+> 🔎 **Not yet run on AWS.** The Claude Code commands follow the Claude Code MCP documentation (<https://code.claude.com/docs/en/mcp>).
+
+**Use an SSM tunnel, not the load balancer.** MCP gives full API access as the signed-in user, and the PoC's load balancer is plain HTTP, so Basic credentials would cross the internet unencrypted. Instead, forward a local port to one Liferay node through Systems Manager: nothing new is exposed, no security group changes, and it works for both runtimes and in HA (any node serves the whole site).
+
+1. **Choose the user Claude acts as.** For a first test, `test@liferay.com` works. For anything else, create a dedicated user (**Control Panel → Users and Organizations → Add User**) with only the roles Claude needs, so its actions are limited and identifiable in the audit log.
+
+2. **Open the tunnel** in a terminal of its own and leave it running (it needs the Session Manager plugin, section 3):
+
+   ```bash
+   NODE=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=${STACK}-liferay-1" "Name=instance-state-name,Values=running" \
+     --query 'Reservations[0].Instances[0].InstanceId' --output text)
+   aws ssm start-session --target "${NODE}" \
+     --document-name AWS-StartPortForwardingSession \
+     --parameters '{"portNumber":["8080"],"localPortNumber":["8080"]}'
+   ```
+
+   ✅ Expected: `Port 8080 opened for sessionId ...` and `Waiting for connections...`. Requests to `http://localhost:8080` now reach Liferay on that node; `localhost` is already in `virtual.hosts.valid.hosts` (section 8.1). Use another `localPortNumber` (for example `18080`) if 8080 is busy on your machine, and change the URLs below to match.
+
+3. **Check MCP through the tunnel** in a second terminal. Type the password at the prompt so it stays out of your shell history (works in zsh and bash):
+
+   ```bash
+   printf 'Liferay user: '; read -r LR_USER
+   printf 'Password: '; stty -echo; read -r LR_PASS; stty echo; echo
+   export LIFERAY_MCP_BASIC=$(printf '%s:%s' "${LR_USER}" "${LR_PASS}" | base64 | tr -d '\n'); unset LR_PASS
+
+   curl -s -o /dev/null -w '%{http_code}\n' -X POST http://localhost:8080/o/mcp \
+     -H "Authorization: Basic ${LIFERAY_MCP_BASIC}" \
+     -H "Accept: application/json, text/event-stream" -H "Content-Type: application/json" \
+     --data '{"id":1,"jsonrpc":"2.0","method":"initialize","params":{"capabilities":{},"clientInfo":{"name":"probe","version":"0"},"protocolVersion":"2025-03-26"}}'
+   ```
+
+   ✅ Expected: `200`. A `401` means the user or password is wrong; `404` means MCP isn't on (11.1).
+
+4. **Add the server to Claude Code.** In the folder you run Claude Code from, create `.mcp.json`. It refers to the variable instead of holding the secret, so the file is safe to share:
+
+   ```json
+   {
+     "mcpServers": {
+       "liferay-ec2": {
+         "type": "http",
+         "url": "http://localhost:8080/o/mcp",
+         "headers": {
+           "Authorization": "Basic ${LIFERAY_MCP_BASIC}"
+         }
+       }
+     }
+   }
+   ```
+
+   Then start Claude Code from that terminal (so it has `LIFERAY_MCP_BASIC`) and approve the project's MCP server when asked:
+
+   ```bash
+   claude
+   ```
+
+   For a quick personal setup, `claude mcp add --transport http --scope user liferay-ec2 http://localhost:8080/o/mcp --header "Authorization: Basic ${LIFERAY_MCP_BASIC}"` does the same in one line, but stores the encoded password **as plain text** in `~/.claude.json`. Base64 is an encoding, not encryption.
+
+5. **Verify in Claude Code.** Run `/mcp` (or `claude mcp list` outside Claude Code): `liferay-ec2` shows as connected. Then ask Claude, for example:
+
+   - *"Using the liferay-ec2 MCP server, list the available tool sets."* Claude calls `getToolSetsPage` and lists sets such as `headless-admin-user-v1.0`, `headless-delivery-v1.0` and `object-admin-v1.0`.
+   - *"Who am I signed in as in Liferay?"* Claude calls `getMyUserAccount` in `headless-admin-user-v1.0`; the name is real, the email address shows as `[EMAIL_ADDRESS]` (masking, 11.1).
+   - *"List the sites in Liferay."* A read-only call that proves the tools reach your data.
+
+   ✅ Expected: answers from your Liferay, not general knowledge. Ask Claude to confirm before any create, update or delete: it acts with the chosen user's permissions.
+
+**Good to know:**
+
+- **The connection drops when Liferay or the tunnel restarts** (a deploy, a failover, closing the terminal). Reopen the tunnel, then reconnect with `/mcp` in Claude Code.
+- **In HA**, the tunnel goes to one node. If that node is being deployed, point the tunnel at another (`${STACK}-liferay-2`).
+- **Large responses:** Claude Code caps MCP tool output (25,000 tokens by default; raise it with `export MAX_MCP_OUTPUT_TOKENS=50000`). Ask for specific fields or smaller pages rather than whole APIs.
+- **Claude Desktop and claude.ai custom connectors** connect from Anthropic's servers and need an endpoint reachable from the public internet, so they can't use this private tunnel. Publishing `/o/mcp` publicly (HTTPS, section 10, and tight `allowed_cidrs`) is possible, but it exposes full API access protected only by a password; prefer Claude Code with the tunnel. 🔎 A local bridge for Claude Desktop (for example `mcp-remote`) is not covered or tested here.
+- **Close the tunnel** with Ctrl+C when you are done, and `unset LIFERAY_MCP_BASIC`.
 
 ---
 
@@ -1354,6 +1463,10 @@ Expected `0` for each in an account used only for this guide (otherwise, none of
 | Tomcat runtime: every Liferay log check fails, `tomcat/logs/catalina.out` doesn't exist | The service runs `catalina.sh run`, which logs to the journal | `journalctl -u liferay`, or `liferay-log.sh` from the current `host/scripts` (section 8.3) |
 | Tomcat runtime: after a CI deploy, Liferay can't reach its database or search, or `portal-ext.properties` is empty | `deploy-tomcat.sh` from before 23 October 2026 copied the workspace's empty `portal-ext.properties` over the rendered one (a restart puts the rendered one back) | Use the current `deploy-tomcat.sh`, which skips files the host renders; run `render-config.sh` and restart Liferay |
 | GitHub Actions: Tomcat deploy job fails in its last step (`Summary`) although the log ends with `Final status: Success` | Workflow from before 23 October 2026 | Use the current `.github/workflows/ci.yml` of the sample workspace |
+| MCP: `/o/mcp` returns HTTP 404 | On 2026.Q3 the flag alone isn't enough: `MCPServerConfiguration.config` must say `enabled=B"true"`; or `MCP_ENABLED` isn't `true` in `host.env`; or the release is older than 2026.Q1 | Check `/opt/liferay/osgi/configs/com.liferay.mcp.server.rest.internal.configuration.MCPServerConfiguration.config` and `grep LPD-63311 /opt/liferay/portal-ext.properties` on the node; re-run `render-config.sh` and restart Liferay |
+| MCP: HTTP 401, or Claude Code shows the server as failed | Wrong user or password in `LIFERAY_MCP_BASIC`, or Claude Code started from a terminal where it isn't exported (the literal `${LIFERAY_MCP_BASIC}` is sent) | Re-run section 11.2 step 3 in the terminal you start `claude` from; `claude mcp list` warns about unset variables |
+| MCP: Claude Code shows "Disconnected" though the probe returns 200 | Client set to SSE transport | Use `"type": "http"` (Streamable HTTP) |
+| MCP: worked, then every tool call fails | Liferay restarted or the SSM tunnel closed | Reopen the tunnel (11.2 step 2), then `/mcp` → reconnect |
 | GitHub: `Please ensure the billing plan supports the required reviewers protection rule` | Required reviewers need GitHub Team or Enterprise for private repositories | Create the environment without reviewers (section 12.2), or use an organization on Team or Enterprise |
 | Custom image deployed, client extensions work, but your OSGi modules are missing (no widget, `Image modules deployed` FAIL) | Something is mounted under `/etc/liferay/mount`, so the image ignores `/mnt/liferay/deploy` where the workspace puts module jars | Mount at `/mnt/liferay/files` as in `host/docker/compose.yaml` (section 7), then `docker compose up -d --force-recreate liferay` |
 | The site suddenly times out (`curl` exit 28, browser spins) though the target is `healthy` | Your public IP changed (another network or a VPN) and is no longer in `allowed_cidrs` | Compare `curl -s https://checkip.amazonaws.com` with `allowed_cidrs`, update it and `terraform -chdir=terraform apply`. A VPN's shared exit IP lets others on that VPN reach the site too |
@@ -1379,6 +1492,8 @@ Confirm these before relying on the guide for anything beyond a sandbox:
 9. **Costs** in section 1 for your region (use the AWS Pricing Calculator).
 10. **Client IP behind the ALB**: how to make Liferay record `X-Forwarded-For` (Tomcat `RemoteIpValve` or a Liferay property) in the Docker image and the Tomcat bundle (section 8).
 11. **The `PasswordModifiedFilter` `NullPointerException`** seen once right after a start (section 8) is harmless and doesn't recur.
+12. **DXP 2026.Q3.8**: everything in sections 6 to 12 was tested with 2026.Q1.13 LTS. 2026.Q3.8 uses the same image layout (checked in the `liferay-docker` source it was built from: the same mount folder logic and trial-key variable), the same Elasticsearch sidecar (8.19.20) and the same Tomcat bundle layout, but hasn't been started on EC2 yet.
+13. **MCP server and the Claude connection** (sections 11.1, 11.2): enabling with the flag plus `MCPServerConfiguration`, the 401-without-credentials check, and reaching it through the SSM tunnel with `Host: localhost:8080` are 🔎 not yet run on AWS.
 
 ---
 

@@ -9,8 +9,12 @@ deployment_mode = "single"
 # docker (container) or tomcat (Tomcat bundle as a systemd service)
 liferay_runtime = "docker"
 
-liferay_version       = "2026.q1.13-lts"
+# 2026.q3.8: latest promoted release. 2026.q1.13-lts: the LTS line (no MCP tool sets).
+liferay_version       = "2026.q3.8"
 elasticsearch_version = "8.19.20"
+
+# Liferay's MCP server at /o/mcp, for Claude (section 11). Beta feature in 2026.Q3.
+enable_mcp = true
 
 # Who may open Liferay. Find your IP with: curl -s https://checkip.amazonaws.com
 allowed_cidrs = ["203.0.113.10/32"]

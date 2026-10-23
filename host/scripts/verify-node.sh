@@ -131,6 +131,19 @@ cluster_members() {
 	[[ "${view}" == *"(${CLUSTER_SIZE})" ]]
 }
 
+# The MCP server answers an MCP "initialize" request. Without credentials, 2026.Q3 replies 401
+# when the server is on and 404 when it is not registered (flag or configuration missing).
+mcp_endpoint() {
+	local code
+
+	code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -X POST \
+		-H "Accept: application/json, text/event-stream" -H "Content-Type: application/json" \
+		--data '{"id": 1, "jsonrpc": "2.0", "method": "initialize", "params": {"capabilities": {}, "clientInfo": {"name": "verify-node", "version": "0"}, "protocolVersion": "2025-03-26"}}' \
+		http://127.0.0.1:8080/o/mcp)
+	echo "HTTP ${code} from /o/mcp without credentials"
+	[ "${code}" = "401" ] || [ "${code}" = "200" ]
+}
+
 doclib_writable() {
 	local probe
 
@@ -187,6 +200,10 @@ if is_liferay_node; then
 	check "License registered" log_contains '[Ll]icense (registered|validation passed)|[Ll]icense.*valid'
 	check "No license errors" no_license_errors
 	check "Documents and Media writable" doclib_writable
+
+	if [ "${MCP_ENABLED:-false}" = "true" ]; then
+		check "MCP server at /o/mcp" mcp_endpoint
+	fi
 
 	if [ "${MODE}" = "ha" ]; then
 		check "EFS mounted" bash -c 'mountpoint /mnt/efs && findmnt -n -o SOURCE /mnt/efs'

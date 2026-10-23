@@ -79,6 +79,13 @@ if is_liferay_node; then
 			echo "cluster.link.channel.properties.transport.0=${LIFERAY_HOME}/jgroups/transport.xml"
 		fi
 
+		if [ "${MCP_ENABLED:-false}" = "true" ]; then
+			echo
+			echo "# Liferay MCP server at /o/mcp (beta feature in 2026.Q3). Also needs"
+			echo "# osgi/configs/com.liferay.mcp.server.rest.internal.configuration.MCPServerConfiguration.config."
+			echo "feature.flag.LPD-63311=true"
+		fi
+
 		echo
 		echo "# Settings shared by every node, from the sample workspace's configs/ec2 (if deployed)"
 		echo "include-and-override=\${liferay.home}/portal-workspace.properties"
@@ -91,6 +98,16 @@ networkHostAddresses=["${ES_URL}"]
 operationMode="REMOTE"
 productionModeEnabled=B"true"
 CONFIG
+
+	# 2026.Q3: the MCP server answers only when this instance-scoped configuration is enabled too;
+	# without it /o/mcp returns 404 and nothing is logged.
+	MCP_CONFIG="${FILES_DIR}/osgi/configs/com.liferay.mcp.server.rest.internal.configuration.MCPServerConfiguration.config"
+
+	if [ "${MCP_ENABLED:-false}" = "true" ]; then
+		echo 'enabled=B"true"' > "${MCP_CONFIG}"
+	else
+		rm -f "${MCP_CONFIG}"
+	fi
 
 	if [ "${MODE}" = "ha" ]; then
 		mkdir -p "${FILES_DIR}/jgroups"
