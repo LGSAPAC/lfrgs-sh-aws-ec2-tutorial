@@ -1,4 +1,5 @@
 # Liferay DXP Tomcat bundle (Tomcat runtime). Installed by install-tomcat-bundle.sh.
+# Logs go to the journal: journalctl -u liferay (or /opt/liferay-ec2/scripts/liferay-log.sh).
 [Unit]
 Description=Liferay DXP (Tomcat bundle)
 After=network-online.target docker.service remote-fs.target

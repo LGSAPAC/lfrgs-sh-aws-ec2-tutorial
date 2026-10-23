@@ -8,10 +8,12 @@
 # shellcheck source=common.sh
 source "$(dirname "$0")/common.sh"
 
+# The Tomcat runtime's service runs "catalina.sh run", which logs to systemd's journal rather
+# than tomcat/logs/catalina.out. Liferay also writes /opt/liferay/logs/liferay.<date>.log.
 if [ "${RUNTIME}" = "docker" ]; then
 	docker logs "$@" liferay 2>&1
 elif [ "${1:-}" = "-f" ]; then
-	tail -n 200 -F "${LIFERAY_HOME}/tomcat/logs/catalina.out"
+	journalctl -u liferay -o cat --no-pager -n 200 -f
 else
-	cat "${LIFERAY_HOME}/tomcat/logs/catalina.out"
+	journalctl -u liferay -o cat --no-pager
 fi

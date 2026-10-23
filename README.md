@@ -3,7 +3,7 @@
 **Product:** Liferay DXP 2026.Q1 LTS (`2026.q1.13-lts`), self-hosted on Amazon EC2, deployed with Docker (or the traditional Tomcat bundle)
 **Audience:** Partner and customer technical teams setting up a sandbox or proof-of-concept (PoC) environment
 **Prepared by:** Liferay Customer Success APAC
-**Status:** Draft, October 2026. Sections 2 to 9, 11, 12 and 15 tested on 22 and 23 October 2026 in Asia Pacific (Tokyo) with the Docker runtime: single mode end to end, and high availability (two clustered nodes, RDS Multi-AZ, EFS, failover, cache replication, rolling CI deploy). Not yet run on AWS: section 10 (HTTPS), section 13 (backups and monitoring) and the Tomcat runtime. The Terraform passes `terraform validate`, every shell script passes ShellCheck, and the sample workspace's build and `linux/amd64` image jobs passed in GitHub Actions on 22 October 2026 ([run 39708712711](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace/actions/runs/39708712711)). Items to confirm are marked **🔎 Verify**.
+**Status:** Draft, October 2026. Sections 2 to 9, 11, 12 and 15 tested on 22 and 23 October 2026 in Asia Pacific (Tokyo): single mode end to end with both the Docker and the Tomcat runtime, and high availability with the Docker runtime (two clustered nodes, RDS Multi-AZ, EFS, failover, cache replication, rolling CI deploy). Not yet run on AWS: section 10 (HTTPS), section 13 (backups and monitoring) and high availability with the Tomcat runtime. The Terraform passes `terraform validate`, every shell script passes ShellCheck, and the sample workspace's build and `linux/amd64` image jobs passed in GitHub Actions on 22 October 2026 ([run 39708712711](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace/actions/runs/39708712711)). Items to confirm are marked **🔎 Verify**.
 
 > ⚠️ **Read this first: this is a draft, only partly tested.**
 > Sections that have been run on a real AWS account are marked **✅ Tested** or **🟡 Partly tested**; the others have not been run yet. This guide builds Liferay on plain EC2 instances: no Kubernetes, no EKS, no Helm. It combines Liferay's documented self-hosted installation (Docker image and Tomcat bundle, Cluster Link, remote Elasticsearch) with common AWS practice (Terraform, Application Load Balancer, RDS, EFS, Systems Manager, GitHub OIDC). AWS console labels and instance types change; follow AWS documentation where it differs from this guide.
@@ -596,7 +596,7 @@ The rendered files on the instance (single mode; HA adds `files/jgroups/control.
 /opt/liferay-ec2/docker/.env
 ```
 
-> 💡 **Why the files belong to `ec2-user`:** they are owned by UID 1000, the user the Liferay container (and the Tomcat runtime's `liferay` user) runs as. On Amazon Linux 2023, UID 1000 is also the default `ec2-user` account, so `ls -l` shows `ec2-user`. `portal-ext.properties` and `.env` contain the database password: SSM sessions run as `ssm-user` and need `sudo` to read them, but anyone who logs in as `ec2-user` can. Don't add SSH keys for `ec2-user`; for production, consider a dedicated UID.
+> 💡 **Why the files belong to `ec2-user`:** they are owned by UID 1000, the user the Liferay container runs as. On Amazon Linux 2023, UID 1000 is also the default `ec2-user` account, so `ls -l` shows `ec2-user`. (The Tomcat runtime creates its own `liferay` user and group with ID **1001** instead, and its files show `liferay`.) `portal-ext.properties` and `.env` contain the database password: SSM sessions run as `ssm-user` and need `sudo` to read them, but anyone who logs in as `ec2-user` can. Don't add SSH keys for `ec2-user`; for production, consider a dedicated UID.
 
 > ⚠️ **Mount at `/mnt/liferay`, not `/etc/liferay/mount`.** The `liferay/dxp` image uses `/etc/liferay/mount` as its mount folder if that folder exists, and `/mnt/liferay` otherwise, never both. The workspace's generated Dockerfile bakes your module jars into `/mnt/liferay/deploy`, so mounting anything under `/etc/liferay/mount` makes the image skip them silently: client extensions still deploy (they live elsewhere), but OSGi modules don't. Found in testing on 22 October 2026; `verify-node.sh` checks for it (`Image modules deployed`).
 
@@ -654,13 +654,13 @@ Expected `0` (the `|| true` stops `grep` from reporting a clean log as a failure
 
 > Applies to `deployment_mode = "single"`. For HA, go to section 9.
 
-> ✅ **Tested on 22 October 2026** in Asia Pacific (Tokyo) with the Docker runtime: all `verify-node.sh` checks pass, the site loads through the load balancer, `test@liferay.com` signs in, and search returns results. The Tomcat runtime (8.3) is not yet tested.
+> ✅ **Tested on 22 October 2026** in Asia Pacific (Tokyo) with the Docker runtime: all `verify-node.sh` checks pass, the site loads through the load balancer, `test@liferay.com` signs in, and search returns results. The Tomcat runtime (8.3) passed the same checks on 23 October 2026.
 
 ### 8.1 What is running
 
 | Service | Docker runtime | Tomcat runtime |
 | --- | --- | --- |
-| Liferay DXP | Container `liferay` (`liferay/dxp:2026.q1.13-lts`), host network, port 8080 | systemd service `liferay`, `/opt/liferay/tomcat`, port 8080 |
+| Liferay DXP | Container `liferay` (`liferay/dxp:2026.q1.13-lts`), host network, port 8080 | systemd service `liferay` running as user `liferay` (UID 1001), `/opt/liferay/tomcat`, port 8080, logs in the journal (`journalctl -u liferay`) and `/opt/liferay/logs` |
 | PostgreSQL 16 | Container `postgres`, `127.0.0.1:5432`, volume `liferay_postgres-data` | Same |
 | Elasticsearch 8.19 | Container `elasticsearch`, `127.0.0.1:9200`, volume `liferay_elasticsearch-data` | Same |
 | Documents and Media | `/var/lib/liferay-ec2/document_library` (bind mount) | Same (symlink from `/opt/liferay/data/document_library`) |
@@ -704,12 +704,28 @@ Click **Sign In**, enter `test@liferay.com` and the 20-character password. Lifer
 
 ### 8.3 Tomcat runtime details
 
-With `liferay_runtime = "tomcat"`, [`install-tomcat-bundle.sh`](host/scripts/install-tomcat-bundle.sh):
+> ✅ **Tested on 23 October 2026** in Asia Pacific (Tokyo), single mode: bootstrap 5 minutes 39 seconds, all `verify-node.sh` checks pass, sign-in, search, and the three sample widgets after a CI deploy (section 12).
 
-1. installs **Amazon Corretto 21** (`java-21-amazon-corretto-headless`);
-2. reads `bundle.url` from `https://releases-cdn.liferay.com/dxp/<version>/release.properties`, downloads the `.tar.gz` bundle and **checks its SHA-512**;
-3. extracts it into `/opt/liferay` (owned by the `liferay` user, UID 1000) and links the versioned Tomcat folder to `/opt/liferay/tomcat`;
+With `liferay_runtime = "tomcat"`, the bootstrap first installs **Amazon Corretto 21** (`java-21-amazon-corretto-headless`) and creates the `liferay` user and group (ID **1001**; on Amazon Linux 2023, ID 1000 is `ec2-user`). Then [`install-tomcat-bundle.sh`](host/scripts/install-tomcat-bundle.sh):
+
+1. reads `bundle.url` from `https://releases-cdn.liferay.com/dxp/<version>/release.properties`, downloads the `.tar.gz` next to the `.7z` it names, and **checks its SHA-512**;
+2. extracts it into `/opt/liferay` (owned by `liferay`); a `tomcat*` folder inside is linked to `/opt/liferay/tomcat` if its name is versioned (in 2026.Q1.13 it is already `tomcat`);
+3. removes the bundle's single-node trial key, so your `license.xml` is the only key (as in the Docker runtime, section 9.6);
 4. appends the heap setting to `tomcat/bin/setenv.sh` and installs [`liferay.service`](host/systemd/liferay.service).
+
+`render-config.sh` writes `/opt/liferay-ec2/runtime/tomcat.env` with `JAVA_HOME` taken from the installed `java` (tested: `/usr/lib/jvm/java-21-amazon-corretto.x86_64`) and the heap, and the service's `ExecStartPre` copies the rendered `portal-ext.properties`, OSGi configs and license into `/opt/liferay` on every start.
+
+What it looked like in testing (UTC, from `/var/log/liferay-ec2-bootstrap.log`): instance up 23:43:18; `Starting postgres elasticsearch` 23:45:30; `Downloading ...liferay-dxp-tomcat-2026.q1.13-lts-1790723987.tar.gz` 23:45:57; `Extracting into /opt/liferay` 23:47:14 (download 1 minute 17 seconds); `Starting Liferay Tomcat service` 23:47:26; `Bootstrap finished` 23:48:57 (`Server startup in [71461] milliseconds`).
+
+Checks specific to the Tomcat runtime:
+
+```bash
+scripts/run-on-stack.sh "${STACK}" liferay 'id liferay; grep -v "^#" /opt/liferay-ec2/runtime/tomcat.env; ps -o args= -u liferay | grep -oE -- "-Xmx[0-9]+[gm]" | tr "\n" " "; echo; ls /opt/liferay/osgi/modules; journalctl -u liferay -o cat --no-pager | grep -E "Server startup|license validation" | tail -2'
+```
+
+✅ Expected: `uid=1001(liferay) gid=1001(liferay)`, a `JAVA_HOME` that exists, `-Xmx2560m -Xmx6g` (the bundle's default, then yours: the last one wins), only `license.xml` in `osgi/modules` before your first deploy, and the startup and license lines.
+
+> 💡 **Logs:** the service runs `catalina.sh run`, which logs to systemd's journal, not to `tomcat/logs/catalina.out`. Use `journalctl -u liferay` (or `/opt/liferay-ec2/scripts/liferay-log.sh`, which picks the right source for either runtime). Liferay also writes `/opt/liferay/logs/liferay.<date>.log`.
 
 To move to a newer DXP release on the Tomcat runtime, change `liferay_version`, `terraform apply`, edit `LIFERAY_VERSION` in `/etc/liferay-ec2/host.env` (or replace the instance), and re-run the bootstrap. 🔎 For a real upgrade, follow Liferay's upgrade guide (database upgrade tool) rather than swapping bundles.
 
@@ -1037,7 +1053,7 @@ Expected the file you uploaded, with its size in bytes; the same row after the r
 
 ## 12. CI/CD with GitHub Actions
 
-> ✅ **Tested on 22 October 2026** in Asia Pacific (Tokyo), single mode with the Docker runtime ([run 39725947441](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace/actions/runs/39725947441)): build, push to ECR through OIDC, deploy through SSM, and the portlet, the global CSS and the React app all working on a page. The Tomcat runtime's deploy is not yet tested.
+> ✅ **Tested on 22 October 2026** in Asia Pacific (Tokyo), single mode with the Docker runtime ([run 39725947441](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace/actions/runs/39725947441)): build, push to ECR through OIDC, deploy through SSM, and the portlet, the global CSS and the React app all working on a page. The Tomcat runtime's deploy passed on 23 October 2026 ([run 39876014417](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace/actions/runs/39876014417), see "Tomcat runtime" below).
 
 Your code (OSGi modules, client extensions, configuration) lives in a **Liferay Workspace** and reaches the instances through GitHub Actions. A ready-made workspace for this guide is **[LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace](https://github.com/LGSAPAC/lfrgs-sh-aws-ec2-sample-workspace)** (DXP `2026.q1.13-lts`, a sample OSGi portlet, a global CSS client extension and a React custom element client extension built with Vite).
 
@@ -1118,6 +1134,30 @@ Tested on 22 October 2026: a push to `main` built and pushed `main-1041124` with
 | `deploy` | **On demand**: manual runs with **Deploy** ticked (on `main` or a `v*` tag) and pushed `v*` tags, when `LIFERAY_STACK` is set. **Skipped** on pushes to `main` | Runs in environment `ec2` (waits for approval if it has required reviewers), then rolls out through SSM, one node at a time, and fails on the first node that does not become ready |
 
 **Image tags:** a `v1.2.0` git tag gives `1.2.0`; anything else gives `<branch>-<short-sha>`, for example `main-1a2b3c4`.
+
+**Tomcat runtime** (`LIFERAY_RUNTIME=tomcat`, tested on 23 October 2026): the workflow uploads `liferay-artifacts-<tag>.tar.gz` (the jars and zips in `deploy/`, plus `configs/` from `configs/common` and `configs/ec2`) to `s3://<artifact-bucket>/builds/`, and `deploy-tomcat.sh` on the instance:
+
+- **skips config files the host renders**, such as `portal-ext.properties` (the workspace build ships an empty one that would replace the database and search settings);
+- copies the other config files into `/opt/liferay` and **restarts Liferay only if one of them changed** (in HA, taking the node out of the load balancer first, section 9.5);
+- copies the jars and zips into `/opt/liferay/deploy`, waits until each one is in `/opt/liferay/osgi/modules` (up to 3 minutes; it fails if one doesn't arrive), and on a hot deploy waits for each bundle's fresh `STARTED` line.
+
+The first deploy adds `portal-workspace.properties` and `portal-setup-wizard.properties`, so Liferay restarts once (in single mode, about 1.5 minutes of downtime). Later deploys with unchanged configs are hot deploys without a restart. Tested output of a hot deploy, 11 seconds in total:
+
+```text
+[liferay-ec2 00:15:27] Deploying build main-3883781
+[liferay-ec2 00:15:27] Skipping portal-ext.properties: rendered on this host
+[liferay-ec2 00:15:27] Waiting for the hot deploy to pick up the files
+Liferay is ready
+[liferay-ec2 00:15:32] Deployed com.liferay.ec2.sample.portlet-1.0.0.jar
+[liferay-ec2 00:15:32] Deployed ec2-sample-global-css.zip
+[liferay-ec2 00:15:32] Deployed ec2-sample-react-app.zip
+[liferay-ec2 00:15:37] STARTED com.liferay.ec2.sample.portlet_1.0.0
+[liferay-ec2 00:15:37] STARTED ec2sampleglobalcss_7.4.13
+[liferay-ec2 00:15:37] STARTED ec2samplereactapp_7.4.13
+[liferay-ec2 00:15:37] Deployment finished
+```
+
+To redeploy a build by hand: `scripts/run-on-stack.sh "${STACK}" liferay '/opt/liferay-ec2/scripts/deploy-tomcat.sh s3://<artifact-bucket>/builds/liferay-artifacts-<tag>.tar.gz'`. The `image` job still builds and pushes the Docker image, so you can switch runtimes later.
 
 Tested timings (single mode): `build` 1 minute, `image` 4 minutes (about 3.1 GB, 2.0 GB compressed in ECR), `deploy` 2 minutes, of which Liferay's restart is about 1 minute.
 
@@ -1310,6 +1350,10 @@ Expected `0` for each in an account used only for this guide (otherwise, none of
 | Redirect loop | HTTPS redirect configured in two places | Redirect only at the ALB |
 | Large uploads fail | ALB idle timeout (300 s here) or Liferay upload limits | Raise `idle_timeout`; check Liferay's upload size settings |
 | GitHub Actions: `Not authorized to perform sts:AssumeRoleWithWebIdentity` | The token's subject doesn't match the role's trust policy: most often GitHub's **immutable subject** format (`repo:<org>@<id>/<name>@<id>:...`), otherwise a wrong repository name, branch or environment | Section 12.2: set `github_oidc_subject_prefix`. Also check `github_repository` is `owner/name` exactly, the deploy job uses environment `ec2`, and the run is on `main` or a `v*` tag |
+| Tomcat runtime bootstrap fails at `useradd: UID 1000 is not unique` | Bootstrap scripts from before 23 October 2026 gave the Tomcat `liferay` user UID 1000, which is `ec2-user` on Amazon Linux 2023 | Use the current `host/scripts` (UID and GID 1001), re-sync the host files and run `bootstrap.sh` again |
+| Tomcat runtime: every Liferay log check fails, `tomcat/logs/catalina.out` doesn't exist | The service runs `catalina.sh run`, which logs to the journal | `journalctl -u liferay`, or `liferay-log.sh` from the current `host/scripts` (section 8.3) |
+| Tomcat runtime: after a CI deploy, Liferay can't reach its database or search, or `portal-ext.properties` is empty | `deploy-tomcat.sh` from before 23 October 2026 copied the workspace's empty `portal-ext.properties` over the rendered one (a restart puts the rendered one back) | Use the current `deploy-tomcat.sh`, which skips files the host renders; run `render-config.sh` and restart Liferay |
+| GitHub Actions: Tomcat deploy job fails in its last step (`Summary`) although the log ends with `Final status: Success` | Workflow from before 23 October 2026 | Use the current `.github/workflows/ci.yml` of the sample workspace |
 | GitHub: `Please ensure the billing plan supports the required reviewers protection rule` | Required reviewers need GitHub Team or Enterprise for private repositories | Create the environment without reviewers (section 12.2), or use an organization on Team or Enterprise |
 | Custom image deployed, client extensions work, but your OSGi modules are missing (no widget, `Image modules deployed` FAIL) | Something is mounted under `/etc/liferay/mount`, so the image ignores `/mnt/liferay/deploy` where the workspace puts module jars | Mount at `/mnt/liferay/files` as in `host/docker/compose.yaml` (section 7), then `docker compose up -d --force-recreate liferay` |
 | The site suddenly times out (`curl` exit 28, browser spins) though the target is `healthy` | Your public IP changed (another network or a VPN) and is no longer in `allowed_cidrs` | Compare `curl -s https://checkip.amazonaws.com` with `allowed_cidrs`, update it and `terraform -chdir=terraform apply`. A VPN's shared exit IP lets others on that VPN reach the site too |
@@ -1331,7 +1375,7 @@ Confirm these before relying on the guide for anything beyond a sandbox:
 5. 🟡 **Elasticsearch 8.19.20** works with DXP 2026.Q1.13 using the `elasticsearch8` OSGi configuration (tested: green indexes, search results). Still check it is in the compatibility matrix for your release.
 6. 🟡 **PostgreSQL 16** works as the container (tested); RDS not yet tested. Still check the compatibility matrix.
 7. ✅ **License log lines** used by `verify-node.sh`: `License registered for DXP Development` on first start and `DXP Development license validation passed` after a restart (confirmed with a DXP Development key).
-8. **Tomcat bundle layout**: `.tar.gz` next to the `.7z` named in `release.properties`, a single top folder, and a `tomcat*` folder inside.
+8. ✅ **Tomcat bundle layout**: the `.tar.gz` sits next to the `.7z` named in `release.properties`, with a `.sha512` file holding just the hash; one top folder (`liferay-dxp/`) and a `tomcat` folder inside (DXP 2026.Q1.13). Confirmed on 23 October 2026.
 9. **Costs** in section 1 for your region (use the AWS Pricing Calculator).
 10. **Client IP behind the ALB**: how to make Liferay record `X-Forwarded-For` (Tomcat `RemoteIpValve` or a Liferay property) in the Docker image and the Tomcat bundle (section 8).
 11. **The `PasswordModifiedFilter` `NullPointerException`** seen once right after a start (section 8) is harmless and doesn't recur.

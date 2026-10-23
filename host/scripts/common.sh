@@ -13,10 +13,17 @@ RUNTIME_DIR="${LIFERAY_EC2_DIR}/runtime"
 FILES_DIR="${RUNTIME_DIR}/files"
 COMPOSE_DIR="${LIFERAY_EC2_DIR}/docker"
 LIFERAY_HOME=/opt/liferay
-LIFERAY_UID=1000
 
 # shellcheck source=/dev/null
 source /etc/liferay-ec2/host.env
+
+# The user Liferay runs as, which owns its files. The Docker image's liferay user is UID 1000.
+# On Amazon Linux 2023, UID 1000 is ec2-user, so the Tomcat runtime's liferay user gets 1001.
+if [ "${RUNTIME:-docker}" = "tomcat" ]; then
+	LIFERAY_UID=1001
+else
+	LIFERAY_UID=1000
+fi
 
 export AWS_DEFAULT_REGION="${REGION}"
 

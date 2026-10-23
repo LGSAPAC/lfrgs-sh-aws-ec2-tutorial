@@ -154,8 +154,15 @@ ES_NETWORK_HOST=${ES_NETWORK_HOST}
 ENV
 
 if is_liferay_node && [ "${RUNTIME}" = "tomcat" ]; then
+	# Corretto's real folder (for example /usr/lib/jvm/java-21-amazon-corretto.x86_64).
+	if command -v java > /dev/null; then
+		JAVA_HOME_DIR=$(dirname "$(dirname "$(readlink -f "$(command -v java)")")")
+	else
+		JAVA_HOME_DIR=/usr/lib/jvm/java-21-amazon-corretto
+	fi
+
 	cat > "${RUNTIME_DIR}/tomcat.env" <<ENV
-JAVA_HOME=/usr/lib/jvm/java-21-amazon-corretto
+JAVA_HOME=${JAVA_HOME_DIR}
 # Appended to CATALINA_OPTS at the end of tomcat/bin/setenv.sh, so it overrides the bundle's -Xmx.
 LIFERAY_EC2_JVM_OPTS=-Xms${LIFERAY_HEAP} -Xmx${LIFERAY_HEAP}
 ENV

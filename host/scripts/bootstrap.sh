@@ -29,6 +29,13 @@ if [ "${MODE}" = "ha" ] && is_liferay_node; then
 	dnf install -y -q amazon-efs-utils
 fi
 
+# Tomcat runtime: Java and the liferay user first, so the config and folders below get the right owner.
+if is_liferay_node && [ "${RUNTIME}" = "tomcat" ]; then
+	dnf install -y -q java-21-amazon-corretto-headless
+	getent group liferay > /dev/null || groupadd --gid "${LIFERAY_UID}" liferay
+	id liferay > /dev/null 2>&1 || useradd --uid "${LIFERAY_UID}" --gid liferay --create-home --home-dir /home/liferay --shell /sbin/nologin liferay
+fi
+
 if ! docker compose version > /dev/null 2>&1; then
 	log "Installing Docker Compose ${COMPOSE_VERSION}"
 	mkdir -p /usr/local/lib/docker/cli-plugins

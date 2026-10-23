@@ -29,10 +29,20 @@ tar -xzf "${WORK}/artifacts.tar.gz" -C "${WORK}"
 log "Deploying build $(cat "${WORK}/BUILD_TAG" 2> /dev/null || echo unknown)"
 
 RESTART=false
+# Liferay log timestamps are UTC ("2026-10-23 00:12:34.601"); only lines after this count.
+DEPLOY_START=$(date -u '+%F %T')
 
 if [ -d "${WORK}/configs" ]; then
 	while IFS= read -r -d '' FILE; do
 		RELATIVE="${FILE#"${WORK}/configs/"}"
+
+		# Files render-config.sh writes (portal-ext.properties, OSGi configs, the license) belong to
+		# the host: the workspace build ships an empty portal-ext.properties that would replace the
+		# database and search settings.
+		if [ -e "${FILES_DIR}/${RELATIVE}" ]; then
+			log "Skipping ${RELATIVE}: rendered on this host"
+			continue
+		fi
 
 		if ! cmp -s "${FILE}" "${LIFERAY_HOME}/${RELATIVE}"; then
 			log "Config changed: ${RELATIVE}"
@@ -63,15 +73,60 @@ if [ "${RESTART}" = "true" ]; then
 	lb_register || fail "Liferay restarted, but the load balancer doesn't see this node as healthy"
 fi
 
-for JAR in "${WORK}"/deploy/*.jar; do
-	[ -e "${JAR}" ] || continue
-	BSN=$(unzip -p "${JAR}" META-INF/MANIFEST.MF | sed -n 's/^Bundle-SymbolicName: *\([^;[:space:]]*\).*/\1/p')
+# Every jar and zip of the build must reach osgi/modules. Liferay moves them there from deploy/,
+# during startup after a restart, or within seconds on a hot deploy.
+MISSING=()
 
-	if grep -q "STARTED ${BSN}_" "${LIFERAY_HOME}"/logs/liferay.*.log 2> /dev/null; then
-		log "Module ${BSN} started"
+for ARTIFACT in "${WORK}"/deploy/*; do
+	NAME=$(basename "${ARTIFACT}")
+
+	for _ in $(seq 1 36); do
+		[ -e "${LIFERAY_HOME}/osgi/modules/${NAME}" ] && break
+		sleep 5
+	done
+
+	if [ -e "${LIFERAY_HOME}/osgi/modules/${NAME}" ]; then
+		log "Deployed ${NAME}"
 	else
-		log "WARNING: no 'STARTED ${BSN}' line in the Liferay log yet"
+		MISSING+=("${NAME}")
 	fi
 done
+
+[ "${#MISSING[@]}" -eq 0 ] || fail "Not in ${LIFERAY_HOME}/osgi/modules after 3 minutes: ${MISSING[*]}"
+
+# A hot deploy restarts each bundle in place and logs STARTED a few seconds after the file is
+# picked up. Bundles installed during a restart don't log it.
+# Module jars start as their symbolic name (com.liferay.ec2.sample.portlet_1.0.0), client
+# extension zips as their name without hyphens (ec2samplereactapp_7.4.13).
+BUNDLES=()
+
+for ARTIFACT in "${WORK}"/deploy/*; do
+	case "${ARTIFACT}" in
+		*.jar) BUNDLES+=("$(unzip -p "${ARTIFACT}" META-INF/MANIFEST.MF | tr -d '\r' | sed -n 's/^Bundle-SymbolicName: *\([^;[:space:]]*\).*/\1/p')") ;;
+		*.zip) BUNDLES+=("$(basename "${ARTIFACT}" .zip | tr -d '-')") ;;
+	esac
+done
+
+started_since_deploy() {
+	awk -v since="${DEPLOY_START}" '($1 " " substr($2, 1, 8)) >= since' "${LIFERAY_HOME}"/logs/liferay.*.log 2> /dev/null | grep -oE "STARTED $1_[^ ]+" | tail -1 || true
+}
+
+if [ "${RESTART}" = "false" ]; then
+	for BUNDLE in "${BUNDLES[@]}"; do
+		LINE=""
+
+		for _ in $(seq 1 12); do
+			LINE=$(started_since_deploy "${BUNDLE}")
+			[ -n "${LINE}" ] && break
+			sleep 5
+		done
+
+		if [ -n "${LINE}" ]; then
+			log "${LINE}"
+		else
+			log "WARNING: no 'STARTED ${BUNDLE}' since ${DEPLOY_START} UTC; check the Liferay log"
+		fi
+	done
+fi
 
 log "Deployment finished"
