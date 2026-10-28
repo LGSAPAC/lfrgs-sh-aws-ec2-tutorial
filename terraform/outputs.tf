@@ -39,7 +39,7 @@ output "efs_id" {
 }
 
 output "artifact_bucket" {
-  description = "S3 bucket for host files, the license and Tomcat builds. GitHub variable ARTIFACT_BUCKET."
+  description = "S3 bucket for host files, the license and Tomcat builds. GitHub secret ARTIFACT_BUCKET."
   value       = aws_s3_bucket.artifacts.bucket
 }
 
@@ -49,12 +49,12 @@ output "license_uploaded" {
 }
 
 output "ecr_repository_url" {
-  description = "ECR repository for the custom DXP image. GitHub variable ECR_REPOSITORY."
+  description = "ECR repository for the custom DXP image. GitHub secret ECR_REPOSITORY."
   value       = aws_ecr_repository.dxp.repository_url
 }
 
 output "github_actions_role_arn" {
-  description = "IAM role GitHub Actions assumes. GitHub variable AWS_ROLE_ARN."
+  description = "IAM role GitHub Actions assumes. GitHub secret AWS_ROLE_ARN."
   value       = local.github_enabled ? aws_iam_role.github_actions[0].arn : null
 }
 
@@ -63,13 +63,13 @@ output "admin_password_command" {
   value       = "aws ssm get-parameter --name ${aws_ssm_parameter.admin_password.name} --with-decryption --query Parameter.Value --output text --region ${var.region}"
 }
 
-output "github_variables_commands" {
-  description = "Sets the sample workspace's GitHub Actions variables (section 12)."
+output "github_settings_commands" {
+  description = "Sets the sample workspace's GitHub Actions secrets and variables (section 12.2). The role, repository and bucket are secrets because each contains the AWS account ID, and GitHub masks secrets (not variables) in public logs."
   value = local.github_enabled ? join("\n", [
+    "gh secret set AWS_ROLE_ARN --repo ${var.github_repository} --body ${aws_iam_role.github_actions[0].arn}",
+    "gh secret set ECR_REPOSITORY --repo ${var.github_repository} --body ${aws_ecr_repository.dxp.repository_url}",
+    "gh secret set ARTIFACT_BUCKET --repo ${var.github_repository} --body ${aws_s3_bucket.artifacts.bucket}",
     "gh variable set AWS_REGION --repo ${var.github_repository} --body ${var.region}",
-    "gh variable set AWS_ROLE_ARN --repo ${var.github_repository} --body ${aws_iam_role.github_actions[0].arn}",
-    "gh variable set ECR_REPOSITORY --repo ${var.github_repository} --body ${aws_ecr_repository.dxp.repository_url}",
-    "gh variable set ARTIFACT_BUCKET --repo ${var.github_repository} --body ${aws_s3_bucket.artifacts.bucket}",
     "gh variable set LIFERAY_STACK --repo ${var.github_repository} --body ${var.name}",
     "gh variable set LIFERAY_RUNTIME --repo ${var.github_repository} --body ${var.liferay_runtime}",
   ]) : null

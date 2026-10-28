@@ -499,8 +499,8 @@ db_endpoint = "127.0.0.1 (container on the Liferay instance)"
 deployment = "single / docker"
 ecr_repository_url = "<account-id>.dkr.ecr.ap-northeast-1.amazonaws.com/liferay-poc/dxp-custom"
 github_actions_role_arn = "arn:aws:iam::<account-id>:role/liferay-poc-github-actions"
-github_variables_commands = <<EOT
-gh variable set AWS_REGION --repo ... (six commands, used in section 12)
+github_settings_commands = <<EOT
+gh secret set AWS_ROLE_ARN --repo ... (six commands, used in section 12)
 EOT
 license_uploaded = true
 liferay_instance_ids = [
@@ -1195,14 +1195,17 @@ If you use your own copy, set `github_repository = "<org>/<your-workspace>"` in 
 Terraform prints the exact commands:
 
 ```bash
-terraform -chdir=terraform output -raw github_variables_commands
+terraform -chdir=terraform output -raw github_settings_commands
 ```
 
-Run them (they set `AWS_REGION`, `AWS_ROLE_ARN`, `ECR_REPOSITORY`, `ARTIFACT_BUCKET`, `LIFERAY_STACK` and `LIFERAY_RUNTIME` as repository **variables**; none of them is a secret). Check them:
+Run them. They set three repository **secrets**, `AWS_ROLE_ARN`, `ECR_REPOSITORY` and `ARTIFACT_BUCKET`, and three repository **variables**, `AWS_REGION`, `LIFERAY_STACK` and `LIFERAY_RUNTIME`. Check them (GitHub shows secrets' names and dates, never their values):
 
 ```bash
+gh secret list --repo <org>/<your-workspace>
 gh variable list --repo <org>/<your-workspace>
 ```
+
+**Why secrets:** the role ARN, the ECR repository URI and the bucket name aren't credentials, but each contains your AWS account ID. GitHub masks **secrets** in workflow logs (`***`), never **variables**, and the logs of a public repository are public to anyone. The workflow also sets `mask-aws-account-id: true` on its AWS sign-in steps, so the account ID is hidden wherever else it appears. Delete old workflow runs whose logs show the account ID with `gh run delete <run-id>`; deleting a run can leave its artifacts behind, so also delete those (`gh api -X DELETE repos/<org>/<your-workspace>/actions/artifacts/<artifact-id>`).
 
 Then create the GitHub **environment** `ec2`, limited to the `main` branch and `v*` tags: **Settings → Environments → New environment** → `ec2` → **Deployment branches and tags** → **Selected branches and tags** → add branch `main` and tag `v*`. Or with the GitHub CLI:
 
@@ -1394,12 +1397,11 @@ terraform -chdir=terraform apply destroy.tfplan
 
 The plan should list only this stack's resources (`Plan: 0 to add, 0 to change, 58 to destroy.` in single mode). With `force_destroy = true` (the default), this deletes the S3 bucket and its objects, the ECR images and the RDS instance **without a final snapshot**, and in single mode the instance's disk, which holds the database and Documents and Media. Take any backups you need first. Rebuilding is sections 5 to 7 again (under 10 minutes for single mode).
 
-Remove the workspace's GitHub variables too. Otherwise its next push to `main` fails at **Sign in to AWS**, because the role no longer exists. Without them, the workflow still builds and checks the image, but doesn't push or deploy. You can keep the `ec2` environment for next time.
+Remove the workspace's GitHub secrets and variables too. Otherwise its next push to `main` fails at **Sign in to AWS**, because the role no longer exists. Without them, the workflow still builds and checks the image, but doesn't push or deploy. You can keep the `ec2` environment for next time.
 
 ```bash
-for v in AWS_REGION AWS_ROLE_ARN ECR_REPOSITORY ARTIFACT_BUCKET LIFERAY_STACK LIFERAY_RUNTIME; do
-  gh variable delete "$v" --repo <org>/<workspace>
-done
+for s in AWS_ROLE_ARN ECR_REPOSITORY ARTIFACT_BUCKET; do gh secret delete "$s" --repo <org>/<workspace>; done
+for v in AWS_REGION LIFERAY_STACK LIFERAY_RUNTIME; do gh variable delete "$v" --repo <org>/<workspace>; done
 ```
 
 ### Verify
