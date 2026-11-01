@@ -1,0 +1,64 @@
+# Checks the guide's code without an AWS account: nothing here creates, reads or costs anything in AWS.
+#
+# - terraform: fmt, validate, and `terraform test`, which plans and "applies" single and HA stacks
+#   against mocked providers (terraform/tests/plan.tftest.hcl).
+# - shellcheck: every shell script.
+# - render-config: runs host/scripts/render-config.sh in an Amazon Linux 2023 container with fake
+#   AWS replies and checks the files it writes (tests/render-config.sh).
+
+name: Validate
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  terraform:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+
+      - name: Format
+        run: terraform fmt -check -recursive -diff
+
+      - name: Init (no backend, no AWS credentials)
+        run: terraform init -backend=false -input=false
+
+      - name: Validate
+        run: terraform validate
+
+      - name: Test with mocked providers
+        run: terraform test
+
+  shellcheck:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: ShellCheck
+        run: |
+          shellcheck --version
+          shellcheck -x -P SCRIPTDIR host/scripts/*.sh scripts/*.sh tests/*.sh
+
+  render-config:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Render the configuration in seven scenarios
+        run: docker run --rm -v "${PWD}:/src:ro" amazonlinux:2023 bash /src/tests/render-config.sh
