@@ -1225,7 +1225,7 @@ gh api -X POST "repos/${REPO}/environments/ec2/deployment-branch-policies" -f na
 gh api repos/<org>/<your-workspace>/actions/oidc/customization/sub
 ```
 
-If the output shows `"use_immutable_subject":true`, copy its `sub_claim_prefix` (for example `repo:LGSAPAC@85264366/lfrgs-sh-aws-ec2-sample-workspace@1429128939`) into `github_oidc_subject_prefix` in `terraform.tfvars` and run `terraform -chdir=terraform apply` (it changes only the GitHub Actions role's trust policy). Otherwise the `image` job fails with `Could not assume role with OIDC: Not authorized to perform sts:AssumeRoleWithWebIdentity`, because the role trusts `repo:<org>/<your-workspace>:...` and the token says `repo:<org>@<id>/<your-workspace>@<id>:...`.
+If the output shows `"use_immutable_subject":true`, copy its `sub_claim_prefix` (for example `repo:<org>@<org-id>/<your-workspace>@<repo-id>`) into `github_oidc_subject_prefix` in `terraform.tfvars` and run `terraform -chdir=terraform apply` (it changes only the GitHub Actions role's trust policy). Otherwise the `image` job fails with `Could not assume role with OIDC: Not authorized to perform sts:AssumeRoleWithWebIdentity`, because the role trusts `repo:<org>/<your-workspace>:...` and the token says `repo:<org>@<id>/<your-workspace>@<id>:...`.
 
 ### 12.3 Run the pipeline
 
