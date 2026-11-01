@@ -9,6 +9,9 @@ resource "aws_lb" "main" {
   subnets            = aws_subnet.public[*].id
   security_groups    = [aws_security_group.alb.id]
   idle_timeout       = 300
+
+  # Reject requests whose header names aren't valid HTTP (request smuggling hardening).
+  drop_invalid_header_fields = true
 }
 
 resource "aws_lb_target_group" "liferay" {
